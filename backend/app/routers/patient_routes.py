@@ -14,12 +14,16 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_session
-from db.crud import auth_crud, patient_crud
+from db.crud import auth_crud, patient_crud, account_status_crud
 from schemas import (
     PatientProfileEnvelope,
     PatientProfileUpdate,
     PatientProfileUpdateResponse,
     PatientUserInfoUpdate,
+    AccountDeactivateRequest,
+    AccountReactivateRequest,
+    AccountStatusResponse,
+    AccountStatusInfo,
 )
 from services import get_storage_service, verify_access_token
 
@@ -261,4 +265,92 @@ async def delete_patient_cover_photo(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete cover photo: {exc}",
         )
+
+
+@router.post("/deactivate-account", response_model=AccountStatusResponse)
+async def deactivate_patient_account(
+    request: AccountDeactivateRequest,
+    current_user=Depends(get_current_patient),
+    session: AsyncSession = Depends(get_session),
+):
+    """Deactivate patient account portal."""
+    if request.portal_type != "patient":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid portal_type. Must be 'patient' for this endpoint.",
+        )
+    
+    # Combine reason and feedback
+    combined_reason = None
+    if request.reason or request.feedback:
+        parts = []
+        if request.reason:
+            parts.append(f"Reason: {request.reason}")
+        if request.feedback:
+            parts.append(f"Feedback: {request.feedback}")
+        combined_reason = "\n".join(parts)
+    
+    result = await account_status_crud.update_account_status(
+        user_id=current_user.id,
+        portal_type="patient",
+        new_status="deactivated",
+        reason=combined_reason,
+        changed_by="user",
+        session=session,
+    )
+    
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to deactivate account",
+        )
+    
+    return result
+
+
+@router.post("/reactivate-account", response_model=AccountStatusResponse)
+async def reactivate_patient_account(
+    request: AccountReactivateRequest,
+    current_user=Depends(get_current_patient),
+    session: AsyncSession = Depends(get_session),
+):
+    """Reactivate patient account portal."""
+    if request.portal_type != "patient":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid portal_type. Must be 'patient' for this endpoint.",
+        )
+    
+    result = await account_status_crud.update_account_status(
+        user_id=current_user.id,
+        portal_type="patient",
+        new_status="active",
+        changed_by="user",
+        session=session,
+    )
+    
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to reactivate account",
+        )
+    
+    return result
+
+
+@router.get("/account-status", response_model=AccountStatusInfo)
+async def get_patient_account_status(
+    current_user=Depends(get_current_patient),
+    session: AsyncSession = Depends(get_session),
+):
+    """Get current account status."""
+    result = await account_status_crud.get_account_status(current_user.id, session)
+    
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Account status not found",
+        )
+    
+    return result
 

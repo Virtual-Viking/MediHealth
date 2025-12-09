@@ -2,17 +2,22 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { patientAPI, PatientProfileData } from "@/services/api";
 import { useAuth } from "@/contexts/AuthContext";
+import DeactivateAccountDialog from "@/components/DeactivateAccountDialog";
 
 const gradientOverlay =
   "linear-gradient(180deg, rgba(10, 12, 29, 0.05) 0%, rgba(10, 12, 29, 0.45) 100%)";
 
 export default function PatientProfilePage() {
   const { user } = useAuth();
+  const router = useRouter();
   const [profileData, setProfileData] = useState<PatientProfileData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showDeactivateDialog, setShowDeactivateDialog] = useState(false);
+  const [accountStatus, setAccountStatus] = useState<{ patient_status: string } | null>(null);
 
   useEffect(() => {
     const loadProfile = async () => {
@@ -21,6 +26,14 @@ export default function PatientProfilePage() {
         const data = await patientAPI.getProfile();
         setProfileData(data);
         setError(null);
+        
+        // Load account status
+        try {
+          const status = await patientAPI.getAccountStatus();
+          setAccountStatus(status);
+        } catch (err) {
+          console.error("Failed to load account status:", err);
+        }
       } catch (err) {
         console.error(err);
         setError("Unable to load your profile.");
@@ -30,6 +43,24 @@ export default function PatientProfilePage() {
     };
     loadProfile();
   }, []);
+
+  const handleDeactivate = async (reason: string, feedback: string) => {
+    try {
+      await patientAPI.deactivateAccount({
+        portal_type: "patient",
+        reason: reason || undefined,
+        feedback: feedback || undefined,
+      });
+      // Reload account status
+      const status = await patientAPI.getAccountStatus();
+      setAccountStatus(status);
+      setShowDeactivateDialog(false);
+      // Redirect to home or show message
+      router.push("/");
+    } catch (err: any) {
+      throw new Error(err.detail || "Failed to deactivate account");
+    }
+  };
 
   const profile = profileData?.profile;
   const coverPhoto = profile?.cover_photo_url || null;
@@ -243,11 +274,57 @@ export default function PatientProfilePage() {
                     <li>Share your care preferences to improve coordination.</li>
                   </ul>
                 </SectionCard>
+
+                <SectionCard title="Account Management">
+                  <div className="space-y-4">
+                    {accountStatus?.patient_status === "deactivated" ? (
+                      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                        <p className="text-sm font-medium text-yellow-800 mb-2">
+                          Your patient account is currently deactivated.
+                        </p>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await patientAPI.reactivateAccount({ portal_type: "patient" });
+                              const status = await patientAPI.getAccountStatus();
+                              setAccountStatus(status);
+                            } catch (err) {
+                              console.error("Failed to reactivate:", err);
+                            }
+                          }}
+                          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-sm"
+                        >
+                          Reactivate Account
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="border-t border-red-200 pt-4">
+                        <p className="text-sm text-gray-600 mb-3">
+                          Deactivating your account will hide your profile from searches. You can reactivate it anytime.
+                        </p>
+                        <button
+                          onClick={() => setShowDeactivateDialog(true)}
+                          className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition text-sm"
+                        >
+                          Deactivate Account
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </SectionCard>
               </div>
             </div>
           </div>
         </div>
       </section>
+
+      <DeactivateAccountDialog
+        isOpen={showDeactivateDialog}
+        onClose={() => setShowDeactivateDialog(false)}
+        onConfirm={handleDeactivate}
+        portalType="patient"
+        portalLabel="Patient"
+      />
     </main>
   );
 }

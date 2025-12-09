@@ -1,0 +1,318 @@
+pipeline {
+    agent any
+    
+    environment {
+        REDIS_DIR = 'redis'
+        DOCKER_COMPOSE_FILE = "${WORKSPACE}/docker-compose.redis.yml"
+        REDIS_PORT = '6379'
+        SLACK_CHANNEL = '#ci-cd'
+        REDIS_CONTAINER_NAME = 'redis-medilink'
+    }
+    
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 15, unit: 'MINUTES')
+        timestamps()
+    }
+    
+    triggers {
+        // Auto-trigger on every commit to docker-compose.redis.yml or Redis-related changes
+        pollSCM('H/10 * * * *') // Poll every 10 minutes
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    echo "Checking out code from ${env.GIT_BRANCH}"
+                    checkout scm
+                    env.GIT_COMMIT_HASH = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+                    
+                    // Load optional credentials (with fallback to defaults)
+                    try {
+                        env.REDIS_HOST = credentials('redis-host')
+                    } catch (Exception e) {
+                        env.REDIS_HOST = 'localhost'
+                        echo "Using default Redis host: localhost"
+                    }
+                    
+                    try {
+                        env.REDIS_PASSWORD = credentials('redis-password')
+                    } catch (Exception e) {
+                        env.REDIS_PASSWORD = ''
+                        echo "No Redis password configured (using default)"
+                    }
+                    
+                    try {
+                        env.REDIS_URL = credentials('redis-url')
+                    } catch (Exception e) {
+                        env.REDIS_URL = ''
+                        echo "No Redis URL configured (using host/port)"
+                    }
+                    
+                    try {
+                        env.SLACK_WEBHOOK_URL = credentials('slack-webhook-url')
+                    } catch (Exception e) {
+                        env.SLACK_WEBHOOK_URL = ''
+                        echo "Slack webhook URL not configured (notifications will be skipped)"
+                    }
+                }
+            }
+        }
+        
+        stage('Check Docker & Docker Compose') {
+            steps {
+                script {
+                    echo "Checking Docker and Docker Compose availability..."
+                    sh '''
+                        if ! command -v docker &> /dev/null; then
+                            echo "Docker is not installed. Please install Docker first."
+                            exit 1
+                        fi
+                        if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
+                            echo "Docker Compose is not installed. Please install Docker Compose first."
+                            exit 1
+                        fi
+                        docker --version
+                        docker-compose --version || docker compose version
+                    '''
+                }
+            }
+        }
+        
+        stage('Stop Existing Redis') {
+            steps {
+                script {
+                    echo "Stopping existing Redis container if running..."
+                    sh '''
+                        # Stop and remove existing container if it exists
+                        docker stop ${REDIS_CONTAINER_NAME} 2>/dev/null || true
+                        docker rm ${REDIS_CONTAINER_NAME} 2>/dev/null || true
+                        
+                        # Also try using docker-compose
+                        cd ${WORKSPACE}
+                        docker-compose -f ${DOCKER_COMPOSE_FILE} down 2>/dev/null || docker compose -f ${DOCKER_COMPOSE_FILE} down 2>/dev/null || true
+                    '''
+                }
+            }
+        }
+        
+        stage('Deploy Redis') {
+            steps {
+                script {
+                    echo "Deploying Redis using Docker Compose..."
+                    sh '''
+                        cd ${WORKSPACE}
+                        
+                        # Check if docker-compose file exists
+                        if [ ! -f "${DOCKER_COMPOSE_FILE}" ]; then
+                            echo "Error: ${DOCKER_COMPOSE_FILE} not found!"
+                            exit 1
+                        fi
+                        
+                        # Deploy Redis
+                        echo "Starting Redis container..."
+                        docker-compose -f ${DOCKER_COMPOSE_FILE} up -d || docker compose -f ${DOCKER_COMPOSE_FILE} up -d
+                        
+                        # Wait for Redis to be ready
+                        echo "Waiting for Redis to be ready..."
+                        sleep 5
+                        
+                        # Verify container is running
+                        if ! docker ps | grep -q ${REDIS_CONTAINER_NAME}; then
+                            echo "Error: Redis container is not running!"
+                            docker-compose -f ${DOCKER_COMPOSE_FILE} logs || docker compose -f ${DOCKER_COMPOSE_FILE} logs
+                            exit 1
+                        fi
+                        
+                        echo "Redis container started successfully!"
+                    '''
+                }
+            }
+        }
+        
+        stage('Health Check') {
+            steps {
+                script {
+                    echo "Running Redis health checks..."
+                    sh '''
+                        # Wait a bit more for Redis to fully initialize
+                        sleep 3
+                        
+                        # Test Redis connection with ping
+                        echo "Testing Redis connection..."
+                        docker exec ${REDIS_CONTAINER_NAME} redis-cli ping || {
+                            echo "Redis ping failed!"
+                            exit 1
+                        }
+                        
+                        # Test Redis INFO command
+                        echo "Getting Redis info..."
+                        docker exec ${REDIS_CONTAINER_NAME} redis-cli INFO server | head -5 || true
+                        
+                        # Test basic SET/GET operations
+                        echo "Testing Redis SET/GET operations..."
+                        docker exec ${REDIS_CONTAINER_NAME} redis-cli SET test:health "ok" || {
+                            echo "Redis SET operation failed!"
+                            exit 1
+                        }
+                        
+                        TEST_VALUE=$(docker exec ${REDIS_CONTAINER_NAME} redis-cli GET test:health)
+                        if [ "$TEST_VALUE" != "ok" ]; then
+                            echo "Redis GET operation failed! Expected 'ok', got '$TEST_VALUE'"
+                            exit 1
+                        fi
+                        
+                        # Clean up test key
+                        docker exec ${REDIS_CONTAINER_NAME} redis-cli DEL test:health || true
+                        
+                        echo "✅ Redis health check passed!"
+                    '''
+                }
+            }
+        }
+        
+        stage('Redis Status & Metrics') {
+            steps {
+                script {
+                    echo "Collecting Redis status and metrics..."
+                    sh '''
+                        echo "=== Redis Container Status ==="
+                        docker ps | grep ${REDIS_CONTAINER_NAME} || echo "Container not found"
+                        
+                        echo ""
+                        echo "=== Redis Memory Usage ==="
+                        docker exec ${REDIS_CONTAINER_NAME} redis-cli INFO memory | grep -E "used_memory_human|used_memory_peak_human|maxmemory_human" || true
+                        
+                        echo ""
+                        echo "=== Redis Stats ==="
+                        docker exec ${REDIS_CONTAINER_NAME} redis-cli INFO stats | grep -E "total_connections_received|total_commands_processed|keyspace_hits|keyspace_misses" || true
+                        
+                        echo ""
+                        echo "=== Redis Keyspace ==="
+                        docker exec ${REDIS_CONTAINER_NAME} redis-cli INFO keyspace || true
+                    '''
+                }
+            }
+        }
+        
+        stage('Verify Connection from Host') {
+            steps {
+                script {
+                    echo "Verifying Redis connection from Jenkins host..."
+                    sh '''
+                        # Try to connect to Redis from host (if redis-cli is available)
+                        if command -v redis-cli &> /dev/null; then
+                            echo "Testing connection from host..."
+                            redis-cli -h ${REDIS_HOST} -p ${REDIS_PORT} ping || echo "Warning: Could not connect from host (redis-cli may not be installed or Redis may not be exposed)"
+                        else
+                            echo "redis-cli not available on host, skipping host connection test"
+                        fi
+                    '''
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                echo "Pipeline completed. Generating summary..."
+                generateBuildSummary()
+            }
+        }
+        success {
+            script {
+                echo "✅ Redis deployment successful!"
+                sendSlackNotification('success')
+            }
+        }
+        failure {
+            script {
+                echo "❌ Redis deployment failed!"
+                // Show logs for debugging
+                sh '''
+                    echo "=== Redis Container Logs ==="
+                    docker logs ${REDIS_CONTAINER_NAME} --tail 50 || true
+                    echo ""
+                    echo "=== Docker Compose Logs ==="
+                    docker-compose -f ${DOCKER_COMPOSE_FILE} logs --tail 50 || docker compose -f ${DOCKER_COMPOSE_FILE} logs --tail 50 || true
+                '''
+                sendSlackNotification('failure')
+            }
+        }
+        cleanup {
+            script {
+                // Clean up workspace
+                cleanWs()
+            }
+        }
+    }
+}
+
+// Helper function to send Slack notifications
+def sendSlackNotification(String status) {
+    def webhookUrl = SLACK_WEBHOOK_URL?.toString()?.trim()
+    if (!webhookUrl || webhookUrl.isEmpty()) {
+        echo "Slack webhook URL not configured, skipping notification"
+        return
+    }
+    
+    def color = status == 'success' ? 'good' : 'danger'
+    def emoji = status == 'success' ? '✅' : '❌'
+    
+    def message = """
+${emoji} *Redis Deployment ${status.toUpperCase()}*
+
+*Commit:* ${env.GIT_COMMIT_HASH}
+*Branch:* ${env.GIT_BRANCH}
+*Build:* #${BUILD_NUMBER}
+*Container:* ${REDIS_CONTAINER_NAME}
+*Duration:* ${currentBuild.durationString}
+*Console:* ${env.BUILD_URL}console
+
+${status == 'success' ? '🎉 Redis deployed and healthy!' : '⚠️ Redis deployment failed. Please check the console logs.'}
+""".stripIndent()
+    
+    sh """
+        curl -X POST ${webhookUrl} \\
+        -H 'Content-Type: application/json' \\
+        -d '{
+            "channel": "${SLACK_CHANNEL}",
+            "username": "Jenkins CI/CD",
+            "icon_emoji": ":jenkins:",
+            "attachments": [{
+                "color": "${color}",
+                "text": "${message.replace('"', '\\"').replace('\n', '\\n')}",
+                "mrkdwn_in": ["text"]
+            }]
+        }'
+    """
+}
+
+// Helper function to generate build summary
+def generateBuildSummary() {
+    def summary = """
+========================================
+Redis CI/CD Pipeline Summary
+========================================
+Build Number: ${BUILD_NUMBER}
+Status: ${currentBuild.currentResult}
+Branch: ${env.GIT_BRANCH}
+Commit: ${env.GIT_COMMIT_HASH}
+Container: ${REDIS_CONTAINER_NAME}
+Duration: ${currentBuild.durationString}
+Build URL: ${env.BUILD_URL}
+========================================
+""".stripIndent()
+    
+    echo summary
+    
+    // Write summary to file
+    writeFile file: 'build-summary.txt', text: summary
+    archiveArtifacts artifacts: 'build-summary.txt', allowEmptyArchive: true
+}
+

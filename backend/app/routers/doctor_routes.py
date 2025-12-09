@@ -11,7 +11,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 from db import get_session
-from db.crud import auth_crud, doctor_crud, address_crud, specialty_crud, patient_file_crud
+from db.crud import auth_crud, doctor_crud, address_crud, specialty_crud, patient_file_crud, account_status_crud
 from schemas import (
     DoctorProfileUpdate,
     DoctorListItem,
@@ -23,6 +23,10 @@ from schemas import (
     SpecialtyRead,
     DoctorSpecialtyRead,
     FileBatchShareRead,
+    AccountDeactivateRequest,
+    AccountReactivateRequest,
+    AccountStatusResponse,
+    AccountStatusInfo,
 )
 from services import verify_access_token, get_storage_service
 from services.google_places import (
@@ -923,3 +927,90 @@ async def set_primary_clinic(
     
     return clinic
 
+
+@router.post("/deactivate-account", response_model=AccountStatusResponse)
+async def deactivate_doctor_account(
+    request: AccountDeactivateRequest,
+    current_user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Deactivate service provider account portal."""
+    if request.portal_type != "service_provider":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid portal_type. Must be 'service_provider' for this endpoint.",
+        )
+    
+    # Combine reason and feedback
+    combined_reason = None
+    if request.reason or request.feedback:
+        parts = []
+        if request.reason:
+            parts.append(f"Reason: {request.reason}")
+        if request.feedback:
+            parts.append(f"Feedback: {request.feedback}")
+        combined_reason = "\n".join(parts)
+    
+    result = await account_status_crud.update_account_status(
+        user_id=current_user.id,
+        portal_type="service_provider",
+        new_status="deactivated",
+        reason=combined_reason,
+        changed_by="user",
+        session=session,
+    )
+    
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to deactivate account",
+        )
+    
+    return result
+
+
+@router.post("/reactivate-account", response_model=AccountStatusResponse)
+async def reactivate_doctor_account(
+    request: AccountReactivateRequest,
+    current_user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Reactivate service provider account portal."""
+    if request.portal_type != "service_provider":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid portal_type. Must be 'service_provider' for this endpoint.",
+        )
+    
+    result = await account_status_crud.update_account_status(
+        user_id=current_user.id,
+        portal_type="service_provider",
+        new_status="active",
+        changed_by="user",
+        session=session,
+    )
+    
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to reactivate account",
+        )
+    
+    return result
+
+
+@router.get("/account-status", response_model=AccountStatusInfo)
+async def get_doctor_account_status(
+    current_user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Get current account status."""
+    result = await account_status_crud.get_account_status(current_user.id, session)
+    
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Account status not found",
+        )
+    
+    return result

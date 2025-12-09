@@ -183,6 +183,57 @@ async def user_login(
     # Convert role to capitalized string for display (e.g., "doctor" -> "Doctor")
     existing_role_str = existing_role_value.capitalize() if existing_role_value else None
     
+    # Check account status based on selected role (only if columns exist)
+    # Handle case where migration hasn't run yet - default to active status
+    try:
+        patient_status = validated_user.patient_status.value if hasattr(validated_user.patient_status, 'value') else str(validated_user.patient_status) if hasattr(validated_user, 'patient_status') else "active"
+        service_provider_status = validated_user.service_provider_status.value if hasattr(validated_user.service_provider_status, 'value') else str(validated_user.service_provider_status) if hasattr(validated_user, 'service_provider_status') else "active"
+    except (AttributeError, KeyError):
+        # Migration hasn't run yet - default to active
+        patient_status = "active"
+        service_provider_status = "active"
+    
+    # Check if account is suspended (suspension affects both portals)
+    if patient_status == "suspended" or service_provider_status == "suspended":
+        suspension_reason = getattr(validated_user, 'suspension_reason', None)
+        suspension_ticket_id = getattr(validated_user, 'suspension_ticket_id', None)
+        return Response(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content=json.dumps({
+                "msg": "This account has been suspended",
+                "account_status": "suspended",
+                "suspension_reason": suspension_reason,
+                "suspension_ticket_id": suspension_ticket_id,
+                "support_email": "support@medilink.com",
+            }),
+            media_type="application/json",
+        )
+    
+    # Check if trying to login to deactivated portal
+    if selected_role == "patient" and patient_status == "deactivated":
+        return Response(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content=json.dumps({
+                "msg": "This account is disabled",
+                "account_status": "deactivated",
+                "portal_type": "patient",
+                "can_reactivate": True,
+            }),
+            media_type="application/json",
+        )
+    
+    if selected_role in ["doctor", "pharmacist", "insurer"] and service_provider_status == "deactivated":
+        return Response(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content=json.dumps({
+                "msg": "This account is disabled",
+                "account_status": "deactivated",
+                "portal_type": "service_provider",
+                "can_reactivate": True,
+            }),
+            media_type="application/json",
+        )
+    
     # Determine role for token based on selected role and existing account
     role_for_token = None
     

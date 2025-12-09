@@ -47,6 +47,13 @@ from .patient_schema import (
     PatientUserInfoUpdate,
     PatientUserSummary,
 )
+from .account_status_schema import (
+    AccountDeactivateRequest,
+    AccountReactivateRequest,
+    AccountStatusResponse,
+    AccountStatusInfo,
+    AccountStatusLogEntry,
+)
 
 __all__ = [
     UserLogin,
@@ -92,4 +99,9 @@ __all__ = [
     PatientDiagnosisRead,
     PatientUserInfoUpdate,
     PatientUserSummary,
+    AccountDeactivateRequest,
+    AccountReactivateRequest,
+    AccountStatusResponse,
+    AccountStatusInfo,
+    AccountStatusLogEntry,
 ]

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { doctorAPI, DoctorProfileData } from "@/services/api";
 import { formatSpecialty } from "@/utils/formatSpecialty";
+import DeactivateAccountDialog from "@/components/DeactivateAccountDialog";
 
 const gradientOverlay =
   "linear-gradient(180deg, rgba(10, 12, 29, 0.05) 0%, rgba(10, 12, 29, 0.45) 100%)";
@@ -21,6 +22,8 @@ export default function DoctorProfileSummaryPage() {
   const [profileData, setProfileData] = useState<DoctorProfileData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showDeactivateDialog, setShowDeactivateDialog] = useState(false);
+  const [accountStatus, setAccountStatus] = useState<{ service_provider_status: string } | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -31,6 +34,15 @@ export default function DoctorProfileSummaryPage() {
         if (!mounted) return;
         setProfileData(data);
         setError(null);
+        
+        // Load account status
+        try {
+          const status = await doctorAPI.getAccountStatus();
+          if (!mounted) return;
+          setAccountStatus(status);
+        } catch (err) {
+          console.error("Failed to load account status:", err);
+        }
       } catch (err) {
         console.error(err);
         if (!mounted) return;
@@ -46,6 +58,24 @@ export default function DoctorProfileSummaryPage() {
       mounted = false;
     };
   }, []);
+
+  const handleDeactivate = async (reason: string, feedback: string) => {
+    try {
+      await doctorAPI.deactivateAccount({
+        portal_type: "service_provider",
+        reason: reason || undefined,
+        feedback: feedback || undefined,
+      });
+      // Reload account status
+      const status = await doctorAPI.getAccountStatus();
+      setAccountStatus(status);
+      setShowDeactivateDialog(false);
+      // Redirect to home or show message
+      router.push("/");
+    } catch (err: any) {
+      throw new Error(err.detail || "Failed to deactivate account");
+    }
+  };
 
   const profile = profileData?.profile;
   const socialLinks = useMemo(
@@ -287,11 +317,57 @@ export default function DoctorProfileSummaryPage() {
                     </div>
                   )}
                 </SectionCard>
+
+                <SectionCard title="Account Management">
+                  <div className="space-y-4">
+                    {accountStatus?.service_provider_status === "deactivated" ? (
+                      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                        <p className="text-sm font-medium text-yellow-800 mb-2">
+                          Your service provider account is currently deactivated.
+                        </p>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await doctorAPI.reactivateAccount({ portal_type: "service_provider" });
+                              const status = await doctorAPI.getAccountStatus();
+                              setAccountStatus(status);
+                            } catch (err) {
+                              console.error("Failed to reactivate:", err);
+                            }
+                          }}
+                          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-sm"
+                        >
+                          Reactivate Account
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="border-t border-red-200 pt-4">
+                        <p className="text-sm text-gray-600 mb-3">
+                          Deactivating your account will hide your profile from searches. You can reactivate it anytime.
+                        </p>
+                        <button
+                          onClick={() => setShowDeactivateDialog(true)}
+                          className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition text-sm"
+                        >
+                          Deactivate Account
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </SectionCard>
               </div>
             </div>
           </div>
         </div>
       </section>
+
+      <DeactivateAccountDialog
+        isOpen={showDeactivateDialog}
+        onClose={() => setShowDeactivateDialog(false)}
+        onConfirm={handleDeactivate}
+        portalType="service_provider"
+        portalLabel="Service Provider"
+      />
     </main>
   );
 }

@@ -202,11 +202,18 @@ async def list_doctors_with_profiles(
 ) -> List[Dict[str, Any]]:
     """Return all doctors with their profile information, including all clinic addresses and distances.
     Returns all users with role='doctor' regardless of profile existence or accepting_new_patients status."""
+    # Import AccountStatusEnum
+    from db.models.user_model import AccountStatusEnum
+    
     # Use LEFT JOIN to include all doctors, even those without profiles
+    # Exclude deactivated service provider accounts from search
     stmt = (
         select(User, DoctorProfile)
         .outerjoin(DoctorProfile, DoctorProfile.user_id == User.id)
-        .where(User.role == UserRoleEnum.doctor)
+        .where(
+            User.role == UserRoleEnum.doctor,
+            User.service_provider_status != AccountStatusEnum.deactivated
+        )
     )
 
     if specialty:

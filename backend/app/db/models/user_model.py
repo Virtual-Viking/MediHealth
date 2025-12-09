@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from .address_model import Address
     from .patient_model import PatientProfile
     from .insurance_model import PatientInsurancePolicy
+    from .account_status_model import AccountStatusLog
 
 
 # Enum for user roles matching database ENUM type
@@ -25,6 +26,13 @@ class UserRoleEnum(str, enum.Enum):
     doctor = "doctor"
     pharmacist = "pharmacist"
     insurer = "insurer"
+
+
+# Enum for account status
+class AccountStatusEnum(str, enum.Enum):
+    active = "active"
+    deactivated = "deactivated"
+    suspended = "suspended"
 
 
 # user table
@@ -47,6 +55,12 @@ class User(Base):
     # role: NULL for patient accounts, 'doctor'/'pharmacist'/'insurer' for service providers
     role: Mapped[Optional[str]] = mapped_column(SQLEnum(UserRoleEnum, name="user_role"), nullable=True)
     accepted_terms: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Account status fields - separate for patient and service provider portals
+    patient_status: Mapped[str] = mapped_column(SQLEnum(AccountStatusEnum, name="account_status"), nullable=False, server_default="active")
+    service_provider_status: Mapped[str] = mapped_column(SQLEnum(AccountStatusEnum, name="account_status"), nullable=False, server_default="active")
+    # Suspension details (only used when status is suspended)
+    suspension_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    suspension_ticket_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, server_default=func.now())
 
@@ -70,4 +84,8 @@ class User(Base):
     # Insurance policies for patients
     insurance_policies: Mapped[List["PatientInsurancePolicy"]] = relationship(
         back_populates="patient", cascade="all, delete-orphan", passive_deletes=True
+    )
+    # Account status change logs
+    account_status_logs: Mapped[List["AccountStatusLog"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )

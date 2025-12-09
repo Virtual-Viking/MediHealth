@@ -211,6 +211,10 @@ const parseErrorDetail = async (response: Response, fallback: string) => {
     const text = await response.text();
     if (!text) return fallback;
     const data = JSON.parse(text);
+    // For account status errors (403), return the full JSON as string
+    if (response.status === 403 && data.account_status) {
+      return JSON.stringify(data);
+    }
     return typeof data?.detail === "string" ? data.detail : fallback;
   } catch {
     return fallback;
@@ -1037,6 +1041,35 @@ export const doctorAPI = {
       defaultError: "Failed to fetch shared reports",
     });
   },
+
+  deactivateAccount: async (data: { portal_type: string; reason?: string; feedback?: string }): Promise<{ user_id: number; portal_type: string; status: string; previous_status: string }> => {
+    return apiFetch<{ user_id: number; portal_type: string; status: string; previous_status: string }>("/doctors/deactivate-account", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(data),
+      defaultError: "Failed to deactivate account",
+    });
+  },
+
+  reactivateAccount: async (data: { portal_type: string }): Promise<{ user_id: number; portal_type: string; status: string; previous_status: string }> => {
+    return apiFetch<{ user_id: number; portal_type: string; status: string; previous_status: string }>("/doctors/reactivate-account", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(data),
+      defaultError: "Failed to reactivate account",
+    });
+  },
+
+  getAccountStatus: async (): Promise<{ user_id: number; patient_status: string; service_provider_status: string; suspension_reason?: string; suspension_ticket_id?: string }> => {
+    return apiFetch<{ user_id: number; patient_status: string; service_provider_status: string; suspension_reason?: string; suspension_ticket_id?: string }>("/doctors/account-status", {
+      method: "GET",
+      defaultError: "Failed to fetch account status",
+    });
+  },
 };
 
 export const patientAPI = {
@@ -1100,6 +1133,35 @@ export const patientAPI = {
     return apiFetch<{ message: string }>("/patients/cover-photo", {
       method: "DELETE",
       defaultError: "Failed to delete cover photo",
+    });
+  },
+
+  deactivateAccount: async (data: { portal_type: string; reason?: string; feedback?: string }): Promise<{ user_id: number; portal_type: string; status: string; previous_status: string }> => {
+    return apiFetch<{ user_id: number; portal_type: string; status: string; previous_status: string }>("/patients/deactivate-account", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(data),
+      defaultError: "Failed to deactivate account",
+    });
+  },
+
+  reactivateAccount: async (data: { portal_type: string }): Promise<{ user_id: number; portal_type: string; status: string; previous_status: string }> => {
+    return apiFetch<{ user_id: number; portal_type: string; status: string; previous_status: string }>("/patients/reactivate-account", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(data),
+      defaultError: "Failed to reactivate account",
+    });
+  },
+
+  getAccountStatus: async (): Promise<{ user_id: number; patient_status: string; service_provider_status: string; suspension_reason?: string; suspension_ticket_id?: string }> => {
+    return apiFetch<{ user_id: number; patient_status: string; service_provider_status: string; suspension_reason?: string; suspension_ticket_id?: string }>("/patients/account-status", {
+      method: "GET",
+      defaultError: "Failed to fetch account status",
     });
   },
 };

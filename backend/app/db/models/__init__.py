@@ -1,4 +1,4 @@
-from .user_model import User
+from .user_model import User, AccountStatusEnum
 from .auth_model import DBSession, OTPStore
 from .doctor_model import DoctorProfile, DoctorSocialLink, Specialty, DoctorSpecialty
 from .appointment_model import Appointment
@@ -15,6 +15,7 @@ from .patient_model import (
 )
 from .insurance_model import PatientInsurancePolicy, PatientInsurancePolicyMember
 from .insurance_policy_document_model import InsurancePolicyDocument
+from .account_status_model import AccountStatusLog
 
 __all__ = [
     "User",
@@ -46,4 +47,6 @@ __all__ = [
     "PatientInsurancePolicy",
     "PatientInsurancePolicyMember",
     "InsurancePolicyDocument",
+    "AccountStatusLog",
+    "AccountStatusEnum",
 ]

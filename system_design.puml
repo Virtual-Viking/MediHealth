@@ -1,0 +1,614 @@
+@startuml System Architecture - MediHealth
+
+!define RECTANGLE class
+
+title MediHealth System Design - UML Diagrams
+
+' ============================================
+' 1. COMPONENT DIAGRAM - System Architecture
+' ============================================
+
+package "Client Layer" {
+  [Web Browser] as WebClient
+  [Mobile Browser] as MobileClient
+}
+
+package "Frontend Layer" {
+  component [Next.js Application] as NextJS {
+    [React Components] as React
+    [TypeScript Services] as TS
+    [API Client] as APIClient
+    [WebSocket Client] as WSClient
+  }
+}
+
+package "API Gateway / Backend" {
+  component [FastAPI Backend] as FastAPI {
+    [CORS Middleware] as CORS
+    [JWT Authentication] as JWT
+    [Rate Limiter] as RateLimit
+  }
+}
+
+package "Routers Layer" {
+  component [Auth Routes] as AuthRouter
+  component [Doctor Routes] as DoctorRouter
+  component [Patient Routes] as PatientRouter
+  component [Appointment Routes] as ApptRouter
+  component [Chat Routes] as ChatRouter
+  component [File Routes] as FileRouter
+  component [Notification Routes] as NotifRouter
+  component [Insurance Routes] as InsuranceRouter
+  component [Calendar Routes] as CalendarRouter
+  component [Dashboard Routes] as DashboardRouter
+}
+
+package "Services Layer" {
+  component [Auth Service] as AuthService {
+    [OTP Utils] as OTP
+    [JWT Utils] as JWTUtils
+  }
+  component [Chat Service] as ChatService
+  component [Google Calendar Service] as CalendarService
+  component [Google Places Service] as PlacesService
+  component [Storage Service] as StorageService
+  component [Message Queue] as MessageQueue
+  component [WebSocket Manager] as WSManager
+  component [Redis Service] as RedisService
+  component [Rate Limiter Service] as RateLimiterService
+  component [Retention Service] as RetentionService
+}
+
+package "Data Layer" {
+  database "PostgreSQL\nCloud SQL" as PostgreSQL {
+    [Users Table] as UsersTable
+    [Appointments Table] as ApptsTable
+    [Chat Tables] as ChatTables
+    [Files Tables] as FilesTables
+    [Insurance Tables] as InsuranceTables
+  }
+  database "Redis\nCache & Pub/Sub" as Redis {
+    [Cache] as RedisCache
+    [Pub/Sub] as RedisPubSub
+    [Rate Limiting] as RedisRateLimit
+  }
+}
+
+package "External Services" {
+  [Google Cloud Storage] as GCPStorage
+  [Google Calendar API] as GoogleCalendar
+  [Google Maps API] as GoogleMaps
+  [Email Service\nSMTP] as EmailService
+}
+
+' Client to Frontend connections
+WebClient --> NextJS
+MobileClient --> NextJS
+
+' Frontend to Backend connections
+NextJS --> FastAPI : HTTPS/REST API
+NextJS --> WSManager : WebSocket
+
+' Backend internal connections
+FastAPI --> CORS
+FastAPI --> JWT
+FastAPI --> RateLimit
+
+' Routers connections
+FastAPI --> AuthRouter
+FastAPI --> DoctorRouter
+FastAPI --> PatientRouter
+FastAPI --> ApptRouter
+FastAPI --> ChatRouter
+FastAPI --> FileRouter
+FastAPI --> NotifRouter
+FastAPI --> InsuranceRouter
+FastAPI --> CalendarRouter
+FastAPI --> DashboardRouter
+
+' Routers to Services connections
+AuthRouter --> AuthService
+DoctorRouter --> AuthService
+PatientRouter --> AuthService
+ApptRouter --> CalendarService
+ChatRouter --> ChatService
+ChatRouter --> WSManager
+FileRouter --> StorageService
+NotifRouter --> MessageQueue
+InsuranceRouter --> AuthService
+CalendarRouter --> CalendarService
+
+' Services to Data Layer connections
+AuthService --> PostgreSQL
+AuthService --> EmailService
+ChatService --> PostgreSQL
+ChatService --> Redis
+ChatService --> WSManager
+StorageService --> PostgreSQL
+StorageService --> GCPStorage
+CalendarService --> PostgreSQL
+CalendarService --> GoogleCalendar
+PlacesService --> GoogleMaps
+WSManager --> Redis
+RateLimiterService --> Redis
+RetentionService --> Redis
+
+' Services internal connections
+AuthService --> OTP
+AuthService --> JWTUtils
+MessageQueue --> EmailService
+
+@enduml
+
+@startuml Class Diagram - Domain Models
+
+title MediHealth Domain Model - Class Diagram
+
+package "User Management" {
+  class User {
+    +int id
+    +String firstName
+    +String lastName
+    +String email
+    +String phone
+    +String passwordHash
+    +boolean isPatient
+    +String role
+    +DateTime createdAt
+    +DateTime updatedAt
+    --
+    +authenticate()
+    +getProfile()
+  }
+
+  class DBSession {
+    +UUID sessionId
+    +int userId
+    +String token
+    +DateTime expiresAt
+    +DateTime createdAt
+  }
+
+  class OTPStore {
+    +int otpId
+    +int userId
+    +String code
+    +DateTime expiresAt
+    +boolean used
+  }
+
+  class Address {
+    +int addressId
+    +int userId
+    +String street
+    +String city
+    +String state
+    +String zipCode
+    +String country
+    +String addressType
+  }
+}
+
+package "Doctor Management" {
+  class DoctorProfile {
+    +int doctorId
+    +int userId
+    +String licenseNumber
+    +String bio
+    +String specialization
+    +String clinicName
+    +boolean isVerified
+    +DateTime createdAt
+  }
+
+  class Specialty {
+    +int specialtyId
+    +String name
+    +String description
+  }
+
+  class DoctorSpecialty {
+    +int doctorSpecialtyId
+    +int doctorId
+    +int specialtyId
+  }
+
+  class DoctorSocialLink {
+    +int socialLinkId
+    +int doctorId
+    +String platform
+    +String url
+  }
+}
+
+package "Patient Management" {
+  class PatientProfile {
+    +int patientId
+    +int userId
+    +DateTime dateOfBirth
+    +String gender
+    +String bloodType
+    +String emergencyContact
+    +DateTime createdAt
+  }
+
+  class PatientMeasurement {
+    +int measurementId
+    +int patientId
+    +String measurementType
+    +float value
+    +String unit
+    +DateTime recordedAt
+  }
+
+  class PatientMedicalCondition {
+    +int conditionId
+    +int patientId
+    +String conditionName
+    +DateTime diagnosedAt
+    +String severity
+  }
+
+  class PatientDiagnosis {
+    +int diagnosisId
+    +int patientId
+    +int doctorId
+    +String diagnosis
+    +DateTime diagnosedAt
+  }
+}
+
+package "Appointment Management" {
+  class Appointment {
+    +int appointmentId
+    +int patientUserId
+    +int doctorUserId
+    +int clinicId
+    +DateTime appointmentDate
+    +int durationMinutes
+    +String status
+    +String appointmentType
+    +String reason
+    +String notes
+    +int rescheduleCount
+    +DateTime createdAt
+    +DateTime updatedAt
+  }
+
+  class AppointmentRequest {
+    +int requestId
+    +int patientUserId
+    +int doctorUserId
+    +DateTime preferredDate
+    +String preferredTimeSlot
+    +String reason
+    +String status
+    +DateTime createdAt
+  }
+}
+
+package "Chat System" {
+  class Conversation {
+    +UUID conversationId
+    +String conversationType
+    +int appointmentId
+    +DateTime createdAt
+    +DateTime updatedAt
+  }
+
+  class ConversationParticipant {
+    +UUID participantId
+    +UUID conversationId
+    +int userId
+    +DateTime joinedAt
+    +DateTime lastReadAt
+    +boolean isActive
+  }
+
+  class Message {
+    +UUID messageId
+    +UUID conversationId
+    +int senderId
+    +String content
+    +String messageType
+    +String attachmentUrl
+    +boolean isEdited
+    +boolean isDeleted
+    +DateTime createdAt
+    +DateTime updatedAt
+  }
+
+  class MessageReadReceipt {
+    +UUID receiptId
+    +UUID messageId
+    +int userId
+    +DateTime readAt
+  }
+}
+
+package "File Management" {
+  class PatientFile {
+    +int fileId
+    +int patientId
+    +int uploadedByUserId
+    +String fileName
+    +String fileType
+    +String storageUrl
+    +String category
+    +DateTime uploadedAt
+  }
+
+  class FileBatch {
+    +int batchId
+    +int patientId
+    +int uploadedByUserId
+    +String batchName
+    +DateTime createdAt
+  }
+
+  class FileBatchShare {
+    +int shareId
+    +int batchId
+    +int sharedWithUserId
+    +String accessLevel
+    +DateTime sharedAt
+    +DateTime expiresAt
+  }
+}
+
+package "Insurance Management" {
+  class PatientInsurancePolicy {
+    +int policyId
+    +int patientId
+    +String policyNumber
+    +String insuranceCompany
+    +String policyType
+    +DateTime effectiveDate
+    +DateTime expiryDate
+    +boolean isActive
+  }
+
+  class PatientInsurancePolicyMember {
+    +int memberId
+    +int policyId
+    +String memberName
+    +String relationship
+    +DateTime dateOfBirth
+  }
+
+  class InsurancePolicyDocument {
+    +int documentId
+    +int policyId
+    +String documentType
+    +String storageUrl
+    +DateTime uploadedAt
+  }
+}
+
+package "Notification System" {
+  class Notification {
+    +int notificationId
+    +int userId
+    +String notificationType
+    +String title
+    +String message
+    +String link
+    +boolean isRead
+    +DateTime createdAt
+  }
+}
+
+' Relationships
+User ||--o{ DBSession : has
+User ||--o{ OTPStore : has
+User ||--|| DoctorProfile : has (optional)
+User ||--|| PatientProfile : has (optional)
+User ||--o{ Address : has
+User ||--o{ Appointment : books
+User ||--o{ Appointment : hosts
+User ||--o{ PatientInsurancePolicy : owns
+User ||--o{ Notification : receives
+
+DoctorProfile ||--o{ DoctorSpecialty : has
+DoctorSpecialty }o--|| Specialty : references
+DoctorProfile ||--o{ DoctorSocialLink : has
+
+PatientProfile ||--o{ PatientMeasurement : has
+PatientProfile ||--o{ PatientMedicalCondition : has
+PatientProfile ||--o{ PatientDiagnosis : has
+PatientProfile ||--o{ PatientFile : owns
+
+Appointment ||--o| AppointmentRequest : created from
+Appointment ||--o{ Conversation : associated with
+
+Conversation ||--o{ ConversationParticipant : has
+Conversation ||--o{ Message : contains
+Message ||--o{ MessageReadReceipt : has
+
+FileBatch ||--o{ PatientFile : contains
+FileBatch ||--o{ FileBatchShare : shared via
+
+PatientInsurancePolicy ||--o{ PatientInsurancePolicyMember : has
+PatientInsurancePolicy ||--o{ InsurancePolicyDocument : has
+
+@enduml
+
+@startuml Deployment Diagram
+
+title MediHealth Deployment Architecture
+
+node "Client Devices" {
+  [Web Browser] as Web
+  [Mobile Browser] as Mobile
+}
+
+cloud "Cloudflare / CDN" {
+  [Cloudflare Tunnel] as CF
+}
+
+node "Frontend Hosting" {
+  [Next.js Application] as NextJSApp
+  [Static Assets] as Assets
+}
+
+node "Backend Hosting" {
+  [FastAPI Application] as FastAPIApp
+  [WebSocket Server] as WSServer
+  [Load Balancer] as LB
+}
+
+database "Google Cloud SQL" {
+  [PostgreSQL Database] as PostgreSQL
+}
+
+database "Redis Instance" {
+  [Redis Cache] as Redis
+  [Redis Pub/Sub] as PubSub
+}
+
+cloud "Google Cloud Platform" {
+  [Cloud Storage] as GCPStorage
+  [Cloud Functions] as GCFunctions
+}
+
+cloud "External APIs" {
+  [Google Calendar API] as GCalAPI
+  [Google Maps API] as GMapsAPI
+  [SMTP Server] as SMTP
+}
+
+Web --> CF : HTTPS
+Mobile --> CF : HTTPS
+CF --> NextJSApp : Proxy
+NextJSApp --> FastAPIApp : REST API
+NextJSApp --> WSServer : WebSocket
+LB --> FastAPIApp : Load Balance
+FastAPIApp --> PostgreSQL : SQL Connection
+FastAPIApp --> Redis : Cache/PubSub
+WSServer --> PubSub : Real-time Messages
+FastAPIApp --> GCPStorage : File Storage
+FastAPIApp --> GCalAPI : Calendar Sync
+FastAPIApp --> GMapsAPI : Location Services
+FastAPIApp --> SMTP : Email Notifications
+
+@enduml
+
+@startuml Sequence Diagram - Appointment Booking Flow
+
+title Appointment Booking Sequence Diagram
+
+actor Patient
+participant "Next.js Frontend" as Frontend
+participant "FastAPI Backend" as Backend
+participant "Auth Service" as Auth
+participant "Appointment Service" as ApptService
+participant "Calendar Service" as Calendar
+participant "PostgreSQL" as DB
+participant "Google Calendar" as GCal
+participant "Notification Service" as Notif
+
+Patient -> Frontend: Login
+Frontend -> Backend: POST /auth/login
+Backend -> Auth: Authenticate user
+Auth -> DB: Verify credentials
+DB --> Auth: User data
+Auth --> Backend: JWT token
+Backend --> Frontend: Return token
+Frontend --> Patient: Display dashboard
+
+Patient -> Frontend: Request appointment
+Frontend -> Backend: POST /appointment-requests
+Backend -> Auth: Verify JWT
+Auth --> Backend: User authenticated
+Backend -> ApptService: Create appointment request
+ApptService -> DB: Save request
+DB --> ApptService: Request created
+ApptService --> Backend: Request ID
+Backend --> Frontend: Request confirmation
+Frontend --> Patient: Show success message
+
+Backend -> Calendar: Check availability
+Calendar -> GCal: Query calendar
+GCal --> Calendar: Available slots
+Calendar --> Backend: Available times
+
+Backend -> Notif: Send notification
+Notif -> DB: Save notification
+Notif --> Patient: Email/SMS notification
+
+@enduml
+
+@startuml Sequence Diagram - Real-time Chat Flow
+
+title Real-time Chat Sequence Diagram
+
+actor User1
+participant "Next.js Frontend" as Frontend1
+participant "WebSocket Manager" as WS
+participant "Chat Service" as Chat
+participant "PostgreSQL" as DB
+participant "Redis Pub/Sub" as Redis
+participant "WebSocket Manager" as WS2
+participant "Next.js Frontend" as Frontend2
+actor User2
+
+User1 -> Frontend1: Open chat
+Frontend1 -> WS: Connect WebSocket
+WS -> Chat: Initialize connection
+Chat -> DB: Load conversation history
+DB --> Chat: Messages
+Chat --> WS: Send history
+WS --> Frontend1: Display messages
+
+User1 -> Frontend1: Send message
+Frontend1 -> WS: Send message via WebSocket
+WS -> Chat: Process message
+Chat -> DB: Save message
+DB --> Chat: Message saved
+Chat -> Redis: Publish message
+Redis --> WS2: Notify other participants
+WS2 -> Frontend2: Push message
+Frontend2 --> User2: Display new message
+
+User2 -> Frontend2: Read message
+Frontend2 -> WS2: Mark as read
+WS2 -> Chat: Update read receipt
+Chat -> DB: Save read receipt
+Chat -> Redis: Publish read status
+Redis --> WS: Notify sender
+WS --> Frontend1: Update read status
+Frontend1 --> User1: Show read indicator
+
+@enduml
+
+@startuml Activity Diagram - User Authentication Flow
+
+title User Authentication Activity Flow
+
+start
+:User enters credentials;
+:Frontend sends login request;
+:Backend validates JWT middleware;
+if (Token valid?) then (yes)
+  :Extract user from token;
+  :Allow request;
+  stop
+else (no)
+  if (Token expired?) then (yes)
+    :Check refresh token;
+    if (Refresh valid?) then (yes)
+      :Generate new access token;
+      :Allow request;
+      stop
+    else (no)
+      :Return 401 Unauthorized;
+      stop
+    endif
+  else (no)
+    :Return 401 Unauthorized;
+    stop
+  endif
+endif
+
+@enduml
+
