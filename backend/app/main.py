@@ -28,6 +28,8 @@ DEFAULT_CORS_ORIGINS = [
     "http://127.0.0.1:3000",
     # Cloudflare tunnel / production domain (HTTPS)
     "https://medilink.virtual-viking.dev",
+    # Common Cloudflare tunnel patterns (add your specific domain via CORS_ALLOW_ORIGINS env var)
+    # Pattern: *.trycloudflare.com, *.cfargotunnel.com, or your custom domain
 ]
 
 

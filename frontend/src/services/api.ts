@@ -51,15 +51,19 @@ const resolveAbsoluteBaseForBrowser = (): string | null => {
   const absoluteIsLocal = isLocalHostname(absoluteHostname);
 
   // Prevent exposing localhost/127.* targets to real users (causes failed requests)
-  if (absoluteIsLocal && !browserIsLocal) {
+  // Exception: If the absolute URL is on the same domain as the browser (e.g., both through tunnel),
+  // allow it even if it looks like localhost (might be internal routing)
+  const sameDomain = browserHostname === absoluteHostname;
+  if (absoluteIsLocal && !browserIsLocal && !sameDomain) {
     return null;
   }
 
-  // Avoid mixed content in HTTPS environments unless the target is also local
+  // Avoid mixed content in HTTPS environments unless the target is also local or same domain
   if (
     window.location.protocol === "https:" &&
     cachedAbsoluteUrl.protocol === "http:" &&
-    !absoluteIsLocal
+    !absoluteIsLocal &&
+    !sameDomain
   ) {
     return null;
   }
@@ -72,6 +76,10 @@ const resolveApiBase = (): ApiBaseResolution => {
   if (absoluteBase) {
     return { mode: "absolute", base: absoluteBase };
   }
+  
+  // When accessed via Cloudflare tunnel or remote domain, prefer relative path
+  // which will be proxied by Next.js to the backend
+  // This ensures the request goes through the same domain/tunnel
   return { mode: "relative", base: RELATIVE_API_BASE };
 };
 
@@ -92,7 +100,8 @@ const logApiBase = () => {
   const key = `${baseInfo.mode}:${baseInfo.base}`;
   const globalObj = window as any;
   if (globalObj.__medilinkLoggedApiBase !== key) {
-    console.info("🌐 MediLink API base:", baseInfo);
+    // Use JSON.stringify to avoid syntax errors in console
+    console.info("🌐 MediLink API base:", JSON.stringify(baseInfo, null, 2));
     globalObj.__medilinkLoggedApiBase = key;
   }
 };
