@@ -96,14 +96,17 @@ const logApiBase = () => {
   if (typeof window === "undefined") {
     return;
   }
+  // Only log once per session to avoid performance issues
+  const globalObj = window as any;
+  if (globalObj.__medilinkApiBaseLogged) {
+    return;
+  }
   const baseInfo = resolveApiBase();
   const key = `${baseInfo.mode}:${baseInfo.base}`;
-  const globalObj = window as any;
-  if (globalObj.__medilinkLoggedApiBase !== key) {
-    // Use JSON.stringify to avoid syntax errors in console
-    console.info("🌐 MediLink API base:", JSON.stringify(baseInfo, null, 2));
-    globalObj.__medilinkLoggedApiBase = key;
-  }
+  // Use JSON.stringify to avoid syntax errors in console
+  console.info("🌐 MediLink API base:", JSON.stringify(baseInfo, null, 2));
+  globalObj.__medilinkApiBaseLogged = true;
+  globalObj.__medilinkLoggedApiBase = key;
 };
 
 // API Response types

@@ -45,10 +45,10 @@ const nextConfig: NextConfig = {
   },
 
   // Configure API rewrites
-  // NOTE: When using Cloudflare tunnel with /api routing, Next.js rewrites may conflict.
-  // If Cloudflare is routing /api directly to backend, consider disabling rewrites.
+  // NOTE: When using Cloudflare tunnel, Cloudflare routes /api directly to backend.
+  // Next.js rewrites should be disabled to avoid conflicts and performance issues.
   async rewrites() {
-    // Check if we should disable rewrites (when Cloudflare handles /api routing)
+    // Disable rewrites when explicitly set or when Cloudflare handles routing
     const disableRewrites = process.env.DISABLE_API_REWRITES === "true";
     
     if (disableRewrites) {
