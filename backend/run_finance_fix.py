@@ -134,3 +134,4 @@ if __name__ == "__main__":
     skip_confirm = "--yes" in sys.argv or "-y" in sys.argv
     asyncio.run(fix_finance_tables(skip_confirm))
 
+

@@ -84,6 +84,7 @@ async def get_pending_payments(
     from db.models.finance_model import Payment
     from db.models.finance_model import DoctorService
     from db.models.user_model import User
+    from db.models.doctor_model import DoctorProfile
 
     # Get all appointments with payment_pending status
     stmt = select(Appointment).where(
@@ -105,8 +106,12 @@ async def get_pending_payments(
             session, appointment.appointment_id
         )
 
-        # Get doctor info
-        doctor = await auth_crud.get_user_by_id(appointment.doctor_user_id, session)
+        # Get doctor info with doctor_profile eagerly loaded
+        doctor_stmt = select(User).options(
+            selectinload(User.doctor_profile)
+        ).where(User.id == appointment.doctor_user_id)
+        doctor_result = await session.execute(doctor_stmt)
+        doctor = doctor_result.scalar_one_or_none()
         doctor_name = f"{doctor.first_name} {doctor.last_name}".strip() if doctor else "Unknown"
 
         # Get service info if payment exists
