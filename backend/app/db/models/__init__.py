@@ -16,6 +16,13 @@ from .patient_model import (
 from .insurance_model import PatientInsurancePolicy, PatientInsurancePolicyMember
 from .insurance_policy_document_model import InsurancePolicyDocument
 from .account_status_model import AccountStatusLog
+from .finance_model import (
+    DoctorService,
+    Payment,
+    SavedPaymentCard,
+    PaymentMethod,
+    PaymentStatus,
+)
 
 __all__ = [
     "User",
@@ -49,4 +56,9 @@ __all__ = [
     "InsurancePolicyDocument",
     "AccountStatusLog",
     "AccountStatusEnum",
+    "DoctorService",
+    "Payment",
+    "SavedPaymentCard",
+    "PaymentMethod",
+    "PaymentStatus",
 ]

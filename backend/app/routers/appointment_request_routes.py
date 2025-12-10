@@ -252,7 +252,7 @@ async def update_appointment_request(
                         session,
                         request.appointment_id,
                         appointment_date=combined_datetime,
-                        status="scheduled",
+                        status="payment_pending",
                         notes=update_data.notes or request.notes,
                         reschedule_count=appointment.reschedule_count + 1,
                     )
@@ -272,6 +272,7 @@ async def update_appointment_request(
                     notification_message = f"{doctor_name} approved your reschedule request for {combined_datetime.strftime('%Y-%m-%d')} at {request.preferred_time_slot_start.strftime('%H:%M')}."
                 else:
                     # INITIAL BOOKING: Doctor accepts initial appointment request
+                    # Status set to "payment_pending" - patient needs to make payment
                     appointment = await appointment_crud.create_appointment(
                         session,
                         patient_user_id=request.patient_user_id,
@@ -279,7 +280,7 @@ async def update_appointment_request(
                         clinic_id=request.clinic_id,
                         appointment_date=combined_datetime,
                         duration_minutes=30,
-                        status="scheduled",
+                        status="payment_pending",
                         appointment_type="consultation",
                         reason=request.reason,
                         notes=request.notes,
@@ -463,7 +464,7 @@ async def update_appointment_request(
                         clinic_id=request.clinic_id,
                         appointment_date=combined_datetime,
                         duration_minutes=30,
-                        status="scheduled",
+                        status="payment_pending",
                         appointment_type="consultation",
                         reason=request.reason,
                         notes=request.notes,

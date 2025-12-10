@@ -10,3 +10,4 @@ from . import patient_file_crud
 from . import patient_crud
 from . import insurance_crud
 from . import account_status_crud
+from . import finance_crud

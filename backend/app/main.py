@@ -16,6 +16,8 @@ from routers import (
     patient_file_routes,
     patient_routes,
     insurance_routes,
+    patient_finance_routes,
+    doctor_finance_routes,
 )
 from services.redis_service import get_redis_client, close_redis_client
 
@@ -103,3 +105,5 @@ app.include_router(doctor_dashboard_routes.router, prefix="/doctors", tags=["doc
 app.include_router(chat_routes.router, prefix="/chat", tags=["chat"])
 app.include_router(patient_file_routes.router, prefix="/patient-files", tags=["patient-files"])
 app.include_router(insurance_routes.router, prefix="/insurance", tags=["insurance"])
+app.include_router(patient_finance_routes.router, prefix="/patient-finance", tags=["patient-finance"])
+app.include_router(doctor_finance_routes.router, prefix="/doctor-finance", tags=["doctor-finance"])

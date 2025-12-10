@@ -310,8 +310,19 @@ const apiFetch = async <T = unknown>(
   }
   
   let response: Response;
+  const requestUrl = buildApiUrl(path);
   try {
-    response = await fetch(buildApiUrl(path), fetchOptions);
+    // Log the actual URL being called for debugging
+    if (path.includes("/login") || path.includes("/auth")) {
+      console.log("🔍 API Request:", {
+        path,
+        fullUrl: requestUrl,
+        method: fetchOptions.method || "GET",
+        baseInfo: resolveApiBase(),
+      });
+    }
+    
+    response = await fetch(requestUrl, fetchOptions);
     clearTimeout(timeoutId);
     
     if (isFileUpload) {
@@ -346,7 +357,18 @@ const apiFetch = async <T = unknown>(
 
   if (!response.ok) {
     const detail = await parseErrorDetail(response, defaultError);
-    console.error(`API Error [${response.status}]: ${detail}`);
+    // Enhanced error logging for 404s to help debug routing issues
+    if (response.status === 404) {
+      console.error(`API Error [404]: ${detail}`, {
+        requestedPath: path,
+        fullUrl: requestUrl,
+        baseInfo: resolveApiBase(),
+        responseUrl: response.url,
+        suggestion: "Check if backend server is running and the route path is correct",
+      });
+    } else {
+      console.error(`API Error [${response.status}]: ${detail}`);
+    }
     throw new APIError(response.status, detail);
   }
 
@@ -1739,6 +1761,312 @@ export const insuranceAPI = {
     return apiFetch<ConsultingDoctor[]>("/insurance/consulting-doctors", {
       method: "GET",
       defaultError: "Failed to fetch consulting doctors",
+    });
+  },
+};
+
+// ==================== Finance Types ====================
+
+export interface DoctorService {
+  id: number;
+  doctor_user_id: number;
+  service_name: string;
+  description?: string | null;
+  price: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DoctorServiceCreate {
+  service_name: string;
+  description?: string;
+  price: number;
+}
+
+export interface DoctorServiceUpdate {
+  service_name?: string;
+  description?: string;
+  price?: number;
+  is_active?: boolean;
+}
+
+export interface SavedPaymentCard {
+  id: number;
+  patient_user_id: number;
+  card_last_four: string;
+  card_brand: string;
+  expiry_month: number;
+  expiry_year: number;
+  cardholder_name?: string | null;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SavedPaymentCardCreate {
+  card_last_four: string;
+  card_brand: string;
+  expiry_month: number;
+  expiry_year: number;
+  cardholder_name?: string;
+  is_default?: boolean;
+}
+
+export interface Payment {
+  id: number;
+  appointment_id: number;
+  doctor_user_id: number;
+  patient_user_id: number;
+  service_id?: number | null;
+  base_amount: number;
+  discount_amount: number;
+  final_amount: number;
+  payment_method: string;
+  payment_status: string;
+  transaction_id?: string | null;
+  saved_card_id?: number | null;
+  cheque_batch_id?: number | null;
+  insurance_batch_id?: number | null;
+  insurance_policy_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PendingPaymentItem {
+  appointment_id: number;
+  appointment_date: string;
+  appointment_status: string;
+  doctor_user_id: number;
+  doctor_name: string;
+  doctor_photo_url?: string | null;
+  patient_user_id: number;
+  patient_name: string;
+  service_id?: number | null;
+  service_name?: string | null;
+  base_amount: number;
+  discount_amount: number;
+  final_amount: number;
+  payment_id?: number | null;
+  payment_status?: string | null;
+  payment_method?: string | null;
+}
+
+export interface OnlinePaymentRequest {
+  appointment_id: number;
+  card_last_four: string;
+  card_brand: string;
+  expiry_month: number;
+  expiry_year: number;
+  cardholder_name?: string;
+  save_card: boolean;
+}
+
+export interface DiscountUpdateRequest {
+  discount_amount: number;
+}
+
+// ==================== Patient Finance API ====================
+
+export const patientFinanceAPI = {
+  // Get pending payments
+  getPendingPayments: async (): Promise<PendingPaymentItem[]> => {
+    return apiFetch<PendingPaymentItem[]>("/patient-finance/pending-payments", {
+      method: "GET",
+      defaultError: "Failed to fetch pending payments",
+    });
+  },
+
+  // Submit online payment
+  submitOnlinePayment: async (request: OnlinePaymentRequest): Promise<Payment> => {
+    return apiFetch<Payment>("/patient-finance/payments/online", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+      defaultError: "Failed to submit payment",
+    });
+  },
+
+  // Submit cheque payment
+  submitChequePayment: async (appointmentId: number, files: File[]): Promise<Payment> => {
+    const formData = new FormData();
+    formData.append("appointment_id", appointmentId.toString());
+    files.forEach((file) => {
+      formData.append("files", file);
+    });
+
+    return apiFetch<Payment>("/patient-finance/payments/cheque", {
+      method: "POST",
+      body: formData,
+      defaultError: "Failed to submit cheque payment",
+    });
+  },
+
+  // Submit insurance payment
+  submitInsurancePayment: async (
+    appointmentId: number,
+    insurancePolicyId: string,
+    files?: File[]
+  ): Promise<Payment> => {
+    const formData = new FormData();
+    formData.append("appointment_id", appointmentId.toString());
+    formData.append("insurance_policy_id", insurancePolicyId);
+    if (files && files.length > 0) {
+      files.forEach((file) => {
+        formData.append("files", file);
+      });
+    }
+
+    return apiFetch<Payment>("/patient-finance/payments/insurance", {
+      method: "POST",
+      body: formData,
+      defaultError: "Failed to submit insurance payment",
+    });
+  },
+
+  // List saved payment cards
+  listSavedCards: async (): Promise<SavedPaymentCard[]> => {
+    return apiFetch<SavedPaymentCard[]>("/patient-finance/cards", {
+      method: "GET",
+      defaultError: "Failed to fetch saved cards",
+    });
+  },
+
+  // Create saved payment card
+  createSavedCard: async (card: SavedPaymentCardCreate): Promise<SavedPaymentCard> => {
+    return apiFetch<SavedPaymentCard>("/patient-finance/cards", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(card),
+      defaultError: "Failed to save card",
+    });
+  },
+
+  // Delete saved payment card
+  deleteSavedCard: async (cardId: number): Promise<void> => {
+    await apiFetch<void>(`/patient-finance/cards/${cardId}`, {
+      method: "DELETE",
+      expectJson: false,
+      defaultError: "Failed to delete card",
+    });
+  },
+};
+
+// ==================== Doctor Finance API ====================
+
+export const doctorFinanceAPI = {
+  // List doctor services
+  listServices: async (): Promise<DoctorService[]> => {
+    return apiFetch<DoctorService[]>("/doctor-finance/services", {
+      method: "GET",
+      defaultError: "Failed to fetch services",
+    });
+  },
+
+  // Create service
+  createService: async (service: DoctorServiceCreate): Promise<DoctorService> => {
+    return apiFetch<DoctorService>("/doctor-finance/services", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(service),
+      defaultError: "Failed to create service",
+    });
+  },
+
+  // Get service
+  getService: async (serviceId: number): Promise<DoctorService> => {
+    return apiFetch<DoctorService>(`/doctor-finance/services/${serviceId}`, {
+      method: "GET",
+      defaultError: "Failed to fetch service",
+    });
+  },
+
+  // Update service
+  updateService: async (
+    serviceId: number,
+    service: DoctorServiceUpdate
+  ): Promise<DoctorService> => {
+    return apiFetch<DoctorService>(`/doctor-finance/services/${serviceId}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(service),
+      defaultError: "Failed to update service",
+    });
+  },
+
+  // Delete service
+  deleteService: async (serviceId: number): Promise<void> => {
+    await apiFetch<void>(`/doctor-finance/services/${serviceId}`, {
+      method: "DELETE",
+      expectJson: false,
+      defaultError: "Failed to delete service",
+    });
+  },
+
+  // Get pending payments
+  getPendingPayments: async (): Promise<PendingPaymentItem[]> => {
+    return apiFetch<PendingPaymentItem[]>("/doctor-finance/pending-payments", {
+      method: "GET",
+      defaultError: "Failed to fetch pending payments",
+    });
+  },
+
+  // Update payment discount
+  updatePaymentDiscount: async (
+    paymentId: number,
+    discount: DiscountUpdateRequest
+  ): Promise<Payment> => {
+    return apiFetch<Payment>(`/doctor-finance/payments/${paymentId}/discount`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(discount),
+      defaultError: "Failed to update discount",
+    });
+  },
+
+  // Get payments pending approval
+  getPaymentsPendingApproval: async (): Promise<Payment[]> => {
+    return apiFetch<Payment[]>("/doctor-finance/payments/pending-approval", {
+      method: "GET",
+      defaultError: "Failed to fetch payments pending approval",
+    });
+  },
+
+  // Approve payment
+  approvePayment: async (paymentId: number): Promise<Payment> => {
+    return apiFetch<Payment>(`/doctor-finance/payments/${paymentId}/approve`, {
+      method: "POST",
+      defaultError: "Failed to approve payment",
+    });
+  },
+
+  // Get payment files
+  getPaymentFiles: async (paymentId: number): Promise<{
+    batch_id: number;
+    batch_heading?: string | null;
+    category: string;
+    files: Array<{
+      id: number;
+      file_name: string;
+      file_url: string;
+      file_type: string;
+      file_size: number;
+      created_at: string;
+    }>;
+  }> => {
+    return apiFetch(`/doctor-finance/payments/${paymentId}/files`, {
+      method: "GET",
+      defaultError: "Failed to fetch payment files",
     });
   },
 };

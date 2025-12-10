@@ -23,6 +23,8 @@ class FileBatchCategory(str, enum.Enum):
     """Category of file batch"""
     insurance = "insurance"
     lab_report = "lab_report"
+    cheque = "cheque"
+    insurance_payment = "insurance_payment"
 
 
 class FileBatch(Base):
