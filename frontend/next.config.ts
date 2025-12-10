@@ -44,6 +44,17 @@ const nextConfig: NextConfig = {
     ignoreDuringBuilds: false, // Keep false to catch errors, but warnings won't fail build
   },
 
+  // Configure images - allow Google Cloud Storage
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "storage.googleapis.com",
+        pathname: "/**",
+      },
+    ],
+  },
+
   // Configure API rewrites
   // NOTE: When using Cloudflare tunnel, Cloudflare routes /api directly to backend.
   // Next.js rewrites should be disabled to avoid conflicts and performance issues.
