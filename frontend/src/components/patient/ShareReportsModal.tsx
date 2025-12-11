@@ -132,7 +132,7 @@ export default function ShareReportsModal({ isOpen, onClose, batch, onShared }: 
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/20 backdrop-blur-md">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto m-4">
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <div>

@@ -49,11 +49,14 @@ export default function FinancePage() {
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<"online" | "cheque" | "insurance" | null>(null);
   
-  // Filter states
+  // Filter states for transaction history
   const [searchQuery, setSearchQuery] = useState("");
   const [filterPaymentType, setFilterPaymentType] = useState<string>("");
   const [filterDateFrom, setFilterDateFrom] = useState<string>("");
   const [filterDateTo, setFilterDateTo] = useState<string>("");
+  
+  // Pagination for transaction history
+  const [visibleTransactions, setVisibleTransactions] = useState(10);
 
   const fetchPendingPayments = async () => {
     try {
@@ -78,6 +81,11 @@ export default function FinancePage() {
     setShowPaymentDialog(false);
     fetchPendingPayments();
   };
+
+  // Separate pending payments (Section 1)
+  const pendingPayments = useMemo(() => {
+    return allPayments.filter(p => !p.payment_status || p.payment_status === "pending" || p.payment_status === "draft");
+  }, [allPayments]);
 
   // Calculate summary metrics
   const summaryMetrics = useMemo(() => {
@@ -104,9 +112,9 @@ export default function FinancePage() {
     };
   }, [allPayments]);
 
-  // Filter and search payments
-  const filteredPayments = useMemo(() => {
-    return allPayments.filter(payment => {
+  // Filter and search payments for transaction history (Section 2)
+  const filteredTransactions = useMemo(() => {
+    let filtered = allPayments.filter(payment => {
       // Search filter
       if (searchQuery) {
         const query = searchQuery.toLowerCase();
@@ -138,8 +146,18 @@ export default function FinancePage() {
 
       return true;
     });
+
+    // Sort by date descending (latest first)
+    return filtered.sort((a, b) => 
+      new Date(b.appointment_date).getTime() - new Date(a.appointment_date).getTime()
+    );
   }, [allPayments, searchQuery, filterPaymentType, filterDateFrom, filterDateTo]);
 
+  const displayedTransactions = useMemo(() => {
+    return filteredTransactions.slice(0, visibleTransactions);
+  }, [filteredTransactions, visibleTransactions]);
+
+  const hasMoreTransactions = filteredTransactions.length > visibleTransactions;
   const activeFiltersCount = [filterPaymentType, filterDateFrom, filterDateTo].filter(Boolean).length;
 
   return (
@@ -195,10 +213,50 @@ export default function FinancePage() {
               </p>
             </div>
 
-            {/* Transactions Table */}
+            {/* SECTION 1: Pending Payments */}
+            <div className="mb-8">
+              <h2 className="text-xl font-bold text-gray-900 mb-4">Pending Payments</h2>
+              <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+                {pendingPayments.length === 0 ? (
+                  <div className="p-8 text-center text-gray-500">
+                    No pending payments at this time.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b border-gray-200">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Transaction Id</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Date</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Paid to</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Total Amount</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Amount Due</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Paid for</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {pendingPayments.map((payment) => (
+                          <PendingPaymentRow
+                            key={payment.appointment_id}
+                            payment={payment}
+                            onPayNow={() => {
+                              setSelectedPayment(payment);
+                              setShowPaymentDialog(true);
+                            }}
+                          />
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* SECTION 2: Transaction History */}
             <div className="bg-white rounded-xl shadow-sm overflow-hidden">
               <div className="p-6">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">Transactions</h2>
+                <h2 className="text-lg font-semibold text-gray-900 mb-4">Transaction History</h2>
                 
                 {/* Filters and Search */}
                 <div className="flex flex-wrap gap-3 mb-4">
@@ -270,40 +328,49 @@ export default function FinancePage() {
                 </div>
 
                 {/* Table */}
-                {filteredPayments.length === 0 ? (
+                {displayedTransactions.length === 0 ? (
                   <div className="text-center py-8 text-gray-500">
                     No transactions found matching your filters.
                   </div>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 border-b border-gray-200">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Transaction Id</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Date</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Paid to</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Payment Type</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Total</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Amount Due</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Payment Status</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Paid for</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Action</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-200">
-                        {filteredPayments.map((payment) => (
-                          <TransactionRow
-                            key={payment.appointment_id}
-                            payment={payment}
-                            onPayNow={() => {
-                              setSelectedPayment(payment);
-                              setShowPaymentDialog(true);
-                            }}
-                          />
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  <>
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-gray-50 border-b border-gray-200">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Transaction Id</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Date</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Paid to</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Payment Type</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Total</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Amount Due</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Payment Status</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Paid for</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                          {displayedTransactions.map((payment) => (
+                            <TransactionHistoryRow
+                              key={payment.appointment_id}
+                              payment={payment}
+                            />
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    
+                    {/* Load More Button */}
+                    {hasMoreTransactions && (
+                      <div className="mt-6 text-center">
+                        <button
+                          onClick={() => setVisibleTransactions(prev => prev + 10)}
+                          className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition"
+                        >
+                          Load More
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -340,12 +407,58 @@ export default function FinancePage() {
   );
 }
 
-interface TransactionRowProps {
+// Component for Pending Payments Section (Section 1)
+interface PendingPaymentRowProps {
   payment: PendingPaymentItem;
   onPayNow: () => void;
 }
 
-function TransactionRow({ payment, onPayNow }: TransactionRowProps) {
+function PendingPaymentRow({ payment, onPayNow }: PendingPaymentRowProps) {
+  return (
+    <tr className="hover:bg-gray-50">
+      <td className="px-4 py-3 text-sm text-gray-900">APT{payment.appointment_id}</td>
+      <td className="px-4 py-3 text-sm text-gray-600">{formatDate(payment.appointment_date)}</td>
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-2">
+          {payment.doctor_photo_url ? (
+            <Image
+              src={payment.doctor_photo_url}
+              alt={payment.doctor_name}
+              width={24}
+              height={24}
+              className="rounded-full object-cover"
+            />
+          ) : (
+            <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-xs">
+              👤
+            </div>
+          )}
+          <span className="text-sm text-gray-900">{payment.doctor_name}</span>
+        </div>
+      </td>
+      <td className="px-4 py-3 text-sm font-medium text-gray-900">{formatCurrency(payment.final_amount)}</td>
+      <td className="px-4 py-3 text-sm font-medium text-gray-900">{formatCurrency(payment.final_amount)}</td>
+      <td className="px-4 py-3 text-sm text-gray-600">
+        Appointment: {payment.appointment_id}
+      </td>
+      <td className="px-4 py-3">
+        <button
+          onClick={onPayNow}
+          className="px-4 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition"
+        >
+          PAY NOW
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+// Component for Transaction History Section (Section 2)
+interface TransactionHistoryRowProps {
+  payment: PendingPaymentItem;
+}
+
+function TransactionHistoryRow({ payment }: TransactionHistoryRowProps) {
   const getPaymentStatusBadge = (status: string | null | undefined) => {
     if (!status || status === "pending") {
       return <span className="px-3 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">Pending</span>;
@@ -393,17 +506,7 @@ function TransactionRow({ payment, onPayNow }: TransactionRowProps) {
       </td>
       <td className="px-4 py-3">{getPaymentStatusBadge(payment.payment_status)}</td>
       <td className="px-4 py-3 text-sm text-gray-600">
-        Appointment: {payment.service_name || "Consultation"}
-      </td>
-      <td className="px-4 py-3">
-        {!isPaid && (
-          <button
-            onClick={onPayNow}
-            className="px-4 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition"
-          >
-            PAY NOW
-          </button>
-        )}
+        Appointment: {payment.appointment_id}
       </td>
     </tr>
   );
@@ -417,7 +520,7 @@ interface PaymentMethodDialogProps {
 
 function PaymentMethodDialog({ payment, onClose, onSelectMethod }: PaymentMethodDialogProps) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/20 backdrop-blur-md">
       <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4">
         <div className="p-6 border-b border-gray-200 flex items-center justify-between">
           <div>
@@ -571,7 +674,7 @@ function OnlinePaymentForm({ payment, onClose, onSuccess }: PaymentModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/20 backdrop-blur-md">
       <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
         <div className="p-6 border-b border-gray-200 flex items-center justify-between">
           <h2 className="text-xl font-bold text-gray-900">Online Payment</h2>
@@ -778,7 +881,7 @@ function ChequePaymentForm({ payment, onClose, onSuccess }: PaymentModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/20 backdrop-blur-md">
       <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4">
         <div className="p-6 border-b border-gray-200 flex items-center justify-between">
           <h2 className="text-xl font-bold text-gray-900">Cheque Payment</h2>
@@ -916,7 +1019,7 @@ function InsurancePaymentForm({ payment, onClose, onSuccess }: PaymentModalProps
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/20 backdrop-blur-md">
       <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
         <div className="p-6 border-b border-gray-200 flex items-center justify-between">
           <h2 className="text-xl font-bold text-gray-900">Insurance Payment</h2>
