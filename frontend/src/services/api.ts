@@ -1791,6 +1791,13 @@ export interface DoctorServiceUpdate {
   is_active?: boolean;
 }
 
+export interface DoctorWidgetMetrics {
+  total_received: number;
+  total_pending_approval: number;
+  total_unpaid: number;
+  new_customers: number;
+}
+
 export interface SavedPaymentCard {
   id: number;
   patient_user_id: number;
@@ -1961,6 +1968,14 @@ export const patientFinanceAPI = {
 // ==================== Doctor Finance API ====================
 
 export const doctorFinanceAPI = {
+  // Get widget metrics
+  getMetrics: async (timeFilter: "weekly" | "monthly" | "yearly" = "monthly"): Promise<DoctorWidgetMetrics> => {
+    return apiFetch<DoctorWidgetMetrics>(`/doctor-finance/metrics?time_filter=${timeFilter}`, {
+      method: "GET",
+      defaultError: "Failed to fetch metrics",
+    });
+  },
+
   // List doctor services
   listServices: async (): Promise<DoctorService[]> => {
     return apiFetch<DoctorService[]>("/doctor-finance/services", {
@@ -2069,6 +2084,14 @@ export const doctorFinanceAPI = {
     return apiFetch(`/doctor-finance/payments/${paymentId}/files`, {
       method: "GET",
       defaultError: "Failed to fetch payment files",
+    });
+  },
+
+  // Get payment history (all payments)
+  getPaymentHistory: async (): Promise<PendingPaymentItem[]> => {
+    return apiFetch<PendingPaymentItem[]>("/doctor-finance/payments/history", {
+      method: "GET",
+      defaultError: "Failed to fetch payment history",
     });
   },
 };

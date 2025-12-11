@@ -30,6 +30,7 @@ from schemas.finance_schema import (
     DoctorServiceRead,
     PaymentRead,
     PendingPaymentItem,
+    DoctorWidgetMetrics,
 )
 from services import verify_access_token
 
@@ -65,6 +66,85 @@ async def get_current_doctor(
         )
 
     return user
+
+
+# ==================== Widget Metrics ====================
+
+@router.get("/metrics", response_model=DoctorWidgetMetrics)
+async def get_widget_metrics(
+    time_filter: str = "monthly",  # weekly, monthly, yearly
+    current_user=Depends(get_current_doctor),
+    session: AsyncSession = Depends(get_session),
+):
+    """Get metrics for dashboard widgets based on time filter"""
+    from datetime import datetime, timedelta
+    from sqlalchemy import func, and_
+    
+    # Calculate date range based on filter
+    now = datetime.now()
+    if time_filter == "weekly":
+        start_date = now - timedelta(days=7)
+    elif time_filter == "yearly":
+        start_date = now - timedelta(days=365)
+    else:  # monthly (default)
+        start_date = now - timedelta(days=30)
+    
+    # Total Payment Received (completed payments in time period)
+    received_result = await session.execute(
+        select(func.coalesce(func.sum(Payment.final_amount), 0))
+        .where(
+            and_(
+                Payment.doctor_user_id == current_user.id,
+                Payment.payment_status == "completed",
+                Payment.updated_at >= start_date
+            )
+        )
+    )
+    total_received = float(received_result.scalar())
+    
+    # Total Amount Pending Approval (pending payments with cheque/insurance)
+    pending_approval_result = await session.execute(
+        select(func.coalesce(func.sum(Payment.final_amount), 0))
+        .where(
+            and_(
+                Payment.doctor_user_id == current_user.id,
+                Payment.payment_status == "pending",
+                Payment.payment_method.in_(["cheque", "insurance"])
+            )
+        )
+    )
+    total_pending_approval = float(pending_approval_result.scalar())
+    
+    # Total Unpaid Amount (all pending payments)
+    unpaid_result = await session.execute(
+        select(func.coalesce(func.sum(Payment.final_amount), 0))
+        .where(
+            and_(
+                Payment.doctor_user_id == current_user.id,
+                Payment.payment_status == "pending"
+            )
+        )
+    )
+    total_unpaid = float(unpaid_result.scalar())
+    
+    # Number of New Customers (distinct patients in time period)
+    new_customers_result = await session.execute(
+        select(func.count(func.distinct(Payment.patient_user_id)))
+        .where(
+            and_(
+                Payment.doctor_user_id == current_user.id,
+                Payment.created_at >= start_date
+            )
+        )
+    )
+    new_customers = int(new_customers_result.scalar())
+    
+    return DoctorWidgetMetrics(
+        total_received=total_received,
+        total_pending_approval=total_pending_approval,
+        total_unpaid=total_unpaid,
+        new_customers=new_customers
+    )
 
 
 # ==================== Doctor Services CRUD ====================
@@ -352,6 +432,86 @@ async def get_payments_pending_approval(
     payments = result.scalars().all()
 
     return payments
+
+
+# ==================== Payment History ====================
+
+@router.get("/payments/history", response_model=List[PendingPaymentItem])
+async def get_payment_history(
+    current_user=Depends(get_current_doctor),
+    session: AsyncSession = Depends(get_session),
+):
+    """Get all payment history for doctor (all appointments with payments)"""
+    try:
+        # Fetch all appointments for this doctor (regardless of status)
+        stmt = (
+            select(Appointment)
+            .where(Appointment.doctor_user_id == current_user.id)
+            .options(selectinload(Appointment.patient), selectinload(Appointment.payment))
+        )
+        result = await session.execute(stmt)
+        appointments = result.scalars().all()
+
+        pending_payments = []
+        for appointment in appointments:
+            patient = appointment.patient
+            patient_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Unknown"
+
+            payment = appointment.payment
+            payment_id = payment.payment_id if payment else None
+            payment_status = payment.payment_status if payment else None
+            payment_method = payment.payment_method if payment else None
+
+            # Get service info
+            service_id = payment.service_id if payment else None
+            service_name = None
+            base_amount = 100.0  # Default consultation fee
+            discount_amount = 0.0
+            final_amount = 100.0
+
+            if service_id:
+                service = await finance_crud.get_doctor_service(current_user.id, service_id, session)
+                if service:
+                    service_name = service.service_name
+                    base_amount = float(service.price)
+
+            if payment:
+                base_amount = float(payment.base_amount)
+                discount_amount = float(payment.discount_amount)
+                final_amount = float(payment.final_amount)
+
+            pending_payments.append(
+                PendingPaymentItem(
+                    appointment_id=appointment.appointment_id,
+                    appointment_date=appointment.appointment_date,
+                    appointment_status=appointment.status,
+                    doctor_user_id=current_user.id,
+                    doctor_name=f"{current_user.first_name} {current_user.last_name}".strip(),
+                    doctor_photo_url=None,  # Can be added if needed
+                    patient_user_id=appointment.patient_user_id,
+                    patient_name=patient_name,
+                    service_id=service_id,
+                    service_name=service_name,
+                    base_amount=base_amount,
+                    discount_amount=discount_amount,
+                    final_amount=final_amount,
+                    payment_id=payment_id,
+                    payment_status=payment_status,
+                    payment_method=payment_method,
+                    payment_created_at=payment.created_at if payment else None,
+                    payment_updated_at=payment.updated_at if payment else None,
+                )
+            )
+
+        return pending_payments
+    except Exception as e:
+        import traceback
+        print(f"Error in get_payment_history: {str(e)}")
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch payment history: {str(e)}",
+        )
 
 
 @router.post("/payments/{payment_id}/approve", response_model=PaymentRead)

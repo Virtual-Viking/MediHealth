@@ -138,3 +138,11 @@ class PendingPaymentItem(BaseModel):
     class Config:
         from_attributes = True
 
+
+class DoctorWidgetMetrics(BaseModel):
+    """Metrics for doctor finance dashboard widgets"""
+    total_received: float
+    total_pending_approval: float
+    total_unpaid: float
+    new_customers: int
+
