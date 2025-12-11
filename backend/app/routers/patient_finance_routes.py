@@ -77,8 +77,8 @@ async def get_pending_payments(
     current_user=Depends(get_current_patient),
     session: AsyncSession = Depends(get_session),
 ):
-    """Get all appointments with payment_pending status for the patient"""
-    from sqlalchemy import select
+    """Get all appointments with payments for the patient (both pending and completed)"""
+    from sqlalchemy import select, or_
     from sqlalchemy.orm import selectinload
     from db.models.appointment_model import Appointment
     from db.models.finance_model import Payment
@@ -86,11 +86,14 @@ async def get_pending_payments(
     from db.models.user_model import User
     from db.models.doctor_model import DoctorProfile
 
-    # Get all appointments with payment_pending status
+    # Get all appointments with payment_pending or confirmed status (to show transaction history)
     stmt = select(Appointment).where(
         Appointment.patient_user_id == current_user.id,
-        Appointment.status == "payment_pending",
-    ).order_by(Appointment.appointment_date.asc())
+        or_(
+            Appointment.status == "payment_pending",
+            Appointment.status == "confirmed"
+        )
+    ).order_by(Appointment.appointment_date.desc())
 
     result = await session.execute(stmt)
     appointments = result.scalars().all()
@@ -159,7 +162,7 @@ async def get_pending_payments(
                     service_id=service_id,
                     base_amount=base_amount,
                     discount_amount=0.0,
-                    payment_method="online",  # Default, will be updated when payment is submitted
+                    payment_method=None,  # Will be set when user chooses payment method
                 )
                 payment_id = payment.id
                 payment_status = payment.payment_status
@@ -289,6 +292,11 @@ async def submit_cheque_payment(
     session: AsyncSession = Depends(get_session),
 ):
     """Submit cheque payment by uploading cheque images (front and back)"""
+    print(f"[CHEQUE PAYMENT] Received request for appointment {appointment_id}")
+    print(f"[CHEQUE PAYMENT] Number of files: {len(files)}")
+    for idx, file in enumerate(files):
+        print(f"[CHEQUE PAYMENT] File {idx+1}: {file.filename}, Type: {file.content_type}")
+    
     # Verify appointment
     appointment = await appointment_crud.get_appointment_by_id(
         session, appointment_id
@@ -319,9 +327,11 @@ async def submit_cheque_payment(
         )
 
     # Validate file types (images only)
-    allowed_types = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
+    allowed_types = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/pjpeg"]
     for file in files:
+        print(f"[CHEQUE PAYMENT] Validating file type: {file.content_type}")
         if file.content_type not in allowed_types:
+            print(f"[CHEQUE PAYMENT] Invalid file type: {file.content_type}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid file type: {file.content_type}. Only images are allowed.",
@@ -344,25 +354,43 @@ async def submit_cheque_payment(
         )
 
     # Upload files as a batch
-    storage_service = get_storage_service()
-    file_contents = []
-    for file in files:
-        content = await file.read()
-        file_contents.append({
-            "filename": file.filename,
-            "content": content,
-            "content_type": file.content_type,
-            "size": len(content),
-        })
+    try:
+        storage_service = get_storage_service()
+        file_contents = []
+        for file in files:
+            print(f"[CHEQUE PAYMENT] Reading file: {file.filename}")
+            content = await file.read()
+            print(f"[CHEQUE PAYMENT] File size: {len(content)} bytes")
+            file_contents.append({
+                "filename": file.filename,
+                "content": content,
+                "content_type": file.content_type,
+                "size": len(content),
+            })
+    except Exception as e:
+        print(f"[CHEQUE PAYMENT] Error reading files: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error reading uploaded files: {str(e)}",
+        )
 
     # Create file batch
-    from db.crud import patient_file_crud
-    batch = await patient_file_crud.create_file_batch(
-        session,
-        patient_user_id=current_user.id,
-        category=FileBatchCategory.cheque.value,
-        heading=f"Cheque for Appointment #{appointment_id}",
-    )
+    try:
+        from db.crud import patient_file_crud
+        print(f"[CHEQUE PAYMENT] Creating file batch for user {current_user.id}")
+        batch = await patient_file_crud.create_file_batch(
+            patient_user_id=current_user.id,
+            category=FileBatchCategory.cheque.value,
+            heading=f"Cheque for Appointment #{appointment_id}",
+            session=session,
+        )
+        print(f"[CHEQUE PAYMENT] File batch created with ID: {batch.id}")
+    except Exception as e:
+        print(f"[CHEQUE PAYMENT] Error creating file batch: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error creating file batch: {str(e)}",
+        )
 
     # Upload files to storage
     uploaded_file_urls = []
@@ -502,10 +530,10 @@ async def submit_insurance_payment(
         # Create file batch
         from db.crud import patient_file_crud
         batch = await patient_file_crud.create_file_batch(
-            session,
             patient_user_id=current_user.id,
             category=FileBatchCategory.insurance_payment.value,
             heading=f"Insurance documents for Appointment #{appointment_id}",
+            session=session,
         )
 
         # Upload files to storage

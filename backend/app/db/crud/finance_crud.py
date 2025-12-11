@@ -233,7 +233,7 @@ async def create_payment(
     service_id: Optional[int],
     base_amount: float,
     discount_amount: float = 0.0,
-    payment_method: str,
+    payment_method: Optional[str] = None,
 ) -> Payment:
     """Create a payment record for an appointment"""
     final_amount = Decimal(str(base_amount)) - Decimal(str(discount_amount))

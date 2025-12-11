@@ -116,9 +116,9 @@ class Payment(Base):
     base_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     discount_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0.0)
     final_amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    payment_method: Mapped[str] = mapped_column(
+    payment_method: Mapped[Optional[str]] = mapped_column(
         SQLEnum(PaymentMethod, name="payment_method", create_constraint=False),
-        nullable=False
+        nullable=True
     )
     payment_status: Mapped[str] = mapped_column(
         SQLEnum(PaymentStatus, name="payment_status", create_constraint=False),

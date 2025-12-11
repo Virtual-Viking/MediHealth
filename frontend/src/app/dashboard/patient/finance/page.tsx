@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   patientFinanceAPI,
@@ -52,8 +52,13 @@ export default function FinancePage() {
   // Filter states for transaction history
   const [searchQuery, setSearchQuery] = useState("");
   const [filterPaymentType, setFilterPaymentType] = useState<string>("");
+  const [filterPaymentStatus, setFilterPaymentStatus] = useState<string>("");
   const [filterDateFrom, setFilterDateFrom] = useState<string>("");
   const [filterDateTo, setFilterDateTo] = useState<string>("");
+  
+  // Sorting states for transaction history
+  const [sortField, setSortField] = useState<string>("appointment_date");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   
   // Pagination for transaction history
   const [visibleTransactions, setVisibleTransactions] = useState(10);
@@ -91,7 +96,7 @@ export default function FinancePage() {
   const summaryMetrics = useMemo(() => {
     const totalDues = allPayments.reduce((sum, p) => sum + p.final_amount, 0);
     const insuranceClaims = allPayments.filter(p => p.payment_method === "insurance").length;
-    const approvedClaims = allPayments.filter(p => p.payment_status === "paid").length;
+    const approvedClaims = allPayments.filter(p => p.payment_status === "completed" || p.payment_status === "paid").length;
     const pendingClaims = allPayments.filter(p => !p.payment_status || p.payment_status === "pending").length;
     
     const now = new Date();
@@ -130,6 +135,17 @@ export default function FinancePage() {
         return false;
       }
 
+      // Payment status filter
+      if (filterPaymentStatus) {
+        if (filterPaymentStatus === "pending" && payment.payment_status !== "pending" && payment.payment_status !== null) {
+          return false;
+        } else if (filterPaymentStatus === "completed" && payment.payment_status !== "completed" && payment.payment_status !== "paid") {
+          return false;
+        } else if (filterPaymentStatus === "failed" && payment.payment_status !== "failed") {
+          return false;
+        }
+      }
+
       // Date range filter
       if (filterDateFrom) {
         const paymentDate = new Date(payment.appointment_date);
@@ -147,18 +163,61 @@ export default function FinancePage() {
       return true;
     });
 
-    // Sort by date descending (latest first)
-    return filtered.sort((a, b) => 
-      new Date(b.appointment_date).getTime() - new Date(a.appointment_date).getTime()
-    );
-  }, [allPayments, searchQuery, filterPaymentType, filterDateFrom, filterDateTo]);
+    // Apply sorting
+    return filtered.sort((a, b) => {
+      let compareValue = 0;
+      
+      switch (sortField) {
+        case "appointment_id":
+          compareValue = a.appointment_id - b.appointment_id;
+          break;
+        case "appointment_date":
+          compareValue = new Date(a.appointment_date).getTime() - new Date(b.appointment_date).getTime();
+          break;
+        case "doctor_name":
+          compareValue = a.doctor_name.localeCompare(b.doctor_name);
+          break;
+        case "payment_method":
+          compareValue = (a.payment_method || "").localeCompare(b.payment_method || "");
+          break;
+        case "final_amount":
+          compareValue = a.final_amount - b.final_amount;
+          break;
+        case "payment_status":
+          compareValue = (a.payment_status || "").localeCompare(b.payment_status || "");
+          break;
+        default:
+          compareValue = new Date(b.appointment_date).getTime() - new Date(a.appointment_date).getTime();
+      }
+      
+      return sortDirection === "asc" ? compareValue : -compareValue;
+    });
+  }, [allPayments, searchQuery, filterPaymentType, filterPaymentStatus, filterDateFrom, filterDateTo, sortField, sortDirection]);
 
   const displayedTransactions = useMemo(() => {
     return filteredTransactions.slice(0, visibleTransactions);
   }, [filteredTransactions, visibleTransactions]);
 
+  const handleSort = (field: string) => {
+    if (sortField === field) {
+      // Toggle direction if same field
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+    } else {
+      // Set new field with default descending
+      setSortField(field);
+      setSortDirection("desc");
+    }
+  };
+
+  const SortIcon = ({ field }: { field: string }) => {
+    if (sortField !== field) {
+      return <span className="text-gray-400">⇅</span>;
+    }
+    return sortDirection === "asc" ? <span className="text-blue-600">↑</span> : <span className="text-blue-600">↓</span>;
+  };
+
   const hasMoreTransactions = filteredTransactions.length > visibleTransactions;
-  const activeFiltersCount = [filterPaymentType, filterDateFrom, filterDateTo].filter(Boolean).length;
+  const activeFiltersCount = [filterPaymentType, filterPaymentStatus, filterDateFrom, filterDateTo].filter(Boolean).length;
 
   return (
     <main className="flex-1 p-6 overflow-y-auto" style={{ backgroundColor: "#ECF4F9" }}>
@@ -274,6 +333,13 @@ export default function FinancePage() {
                     </div>
                   )}
                   
+                  {filterPaymentStatus && (
+                    <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm">
+                      <span className="text-gray-700">Status: {filterPaymentStatus}</span>
+                      <button onClick={() => setFilterPaymentStatus("")} className="text-gray-500 hover:text-gray-700">×</button>
+                    </div>
+                  )}
+                  
                   {(filterDateFrom || filterDateTo) && (
                     <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm">
                       <span className="text-gray-700">
@@ -310,6 +376,17 @@ export default function FinancePage() {
                     <option value="insurance">Insurance</option>
                   </select>
                   
+                  <select
+                    value={filterPaymentStatus}
+                    onChange={(e) => setFilterPaymentStatus(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">All Payment Status</option>
+                    <option value="pending">Pending</option>
+                    <option value="completed">Paid</option>
+                    <option value="failed">Failed</option>
+                  </select>
+                  
                   <input
                     type="date"
                     value={filterDateFrom}
@@ -338,13 +415,61 @@ export default function FinancePage() {
                       <table className="w-full">
                         <thead className="bg-gray-50 border-b border-gray-200">
                           <tr>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Transaction Id</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Date</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Paid to</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Payment Type</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Total</th>
+                            <th 
+                              onClick={() => handleSort("appointment_id")}
+                              className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider cursor-pointer hover:bg-gray-100 select-none"
+                            >
+                              <div className="flex items-center gap-1">
+                                Transaction Id
+                                <SortIcon field="appointment_id" />
+                              </div>
+                            </th>
+                            <th 
+                              onClick={() => handleSort("appointment_date")}
+                              className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider cursor-pointer hover:bg-gray-100 select-none"
+                            >
+                              <div className="flex items-center gap-1">
+                                Date
+                                <SortIcon field="appointment_date" />
+                              </div>
+                            </th>
+                            <th 
+                              onClick={() => handleSort("doctor_name")}
+                              className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider cursor-pointer hover:bg-gray-100 select-none"
+                            >
+                              <div className="flex items-center gap-1">
+                                Paid to
+                                <SortIcon field="doctor_name" />
+                              </div>
+                            </th>
+                            <th 
+                              onClick={() => handleSort("payment_method")}
+                              className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider cursor-pointer hover:bg-gray-100 select-none"
+                            >
+                              <div className="flex items-center gap-1">
+                                Payment Type
+                                <SortIcon field="payment_method" />
+                              </div>
+                            </th>
+                            <th 
+                              onClick={() => handleSort("final_amount")}
+                              className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider cursor-pointer hover:bg-gray-100 select-none"
+                            >
+                              <div className="flex items-center gap-1">
+                                Total
+                                <SortIcon field="final_amount" />
+                              </div>
+                            </th>
                             <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Amount Due</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Payment Status</th>
+                            <th 
+                              onClick={() => handleSort("payment_status")}
+                              className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider cursor-pointer hover:bg-gray-100 select-none"
+                            >
+                              <div className="flex items-center gap-1">
+                                Payment Status
+                                <SortIcon field="payment_status" />
+                              </div>
+                            </th>
                             <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Paid for</th>
                           </tr>
                         </thead>
@@ -377,27 +502,14 @@ export default function FinancePage() {
           </>
         )}
 
-        {/* Payment Method Selection Dialog */}
-        {showPaymentDialog && selectedPayment && !paymentMethod && (
-          <PaymentMethodDialog
+        {/* Payment Dialog with Order Details */}
+        {showPaymentDialog && selectedPayment && (
+          <PaymentDetailsDialog
             payment={selectedPayment}
             onClose={() => {
               setShowPaymentDialog(false);
-              setSelectedPayment(null);
-            }}
-            onSelectMethod={(method) => setPaymentMethod(method)}
-          />
-        )}
-
-        {/* Payment Form Dialog */}
-        {selectedPayment && paymentMethod && (
-          <PaymentModal
-            payment={selectedPayment}
-            method={paymentMethod}
-            onClose={() => {
               setSelectedPayment(null);
               setPaymentMethod(null);
-              setShowPaymentDialog(false);
             }}
             onSuccess={handlePaymentSuccess}
           />
@@ -463,7 +575,7 @@ function TransactionHistoryRow({ payment }: TransactionHistoryRowProps) {
     if (!status || status === "pending") {
       return <span className="px-3 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">Pending</span>;
     }
-    if (status === "paid") {
+    if (status === "completed" || status === "paid") {
       return <span className="px-3 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full">Paid</span>;
     }
     if (status === "overdue") {
@@ -472,10 +584,13 @@ function TransactionHistoryRow({ payment }: TransactionHistoryRowProps) {
     if (status === "draft") {
       return <span className="px-3 py-1 text-xs font-medium bg-gray-100 text-gray-800 rounded-full">Draft</span>;
     }
+    if (status === "failed") {
+      return <span className="px-3 py-1 text-xs font-medium bg-red-100 text-red-800 rounded-full">Failed</span>;
+    }
     return <span className="px-3 py-1 text-xs font-medium bg-gray-100 text-gray-800 rounded-full">{status}</span>;
   };
 
-  const isPaid = payment.payment_status === "paid";
+  const isPaid = payment.payment_status === "completed" || payment.payment_status === "paid";
 
   return (
     <tr className="hover:bg-gray-50">
@@ -499,7 +614,7 @@ function TransactionHistoryRow({ payment }: TransactionHistoryRowProps) {
           <span className="text-sm text-gray-900">{payment.doctor_name}</span>
         </div>
       </td>
-      <td className="px-4 py-3 text-sm text-gray-600 uppercase">{payment.payment_method || "PENDING"}</td>
+      <td className="px-4 py-3 text-sm text-gray-600 uppercase">{payment.payment_method || "-"}</td>
       <td className="px-4 py-3 text-sm font-medium text-gray-900">{formatCurrency(payment.final_amount)}</td>
       <td className="px-4 py-3 text-sm font-medium text-gray-900">
         {isPaid ? formatCurrency(0) : formatCurrency(payment.final_amount)}
@@ -512,107 +627,23 @@ function TransactionHistoryRow({ payment }: TransactionHistoryRowProps) {
   );
 }
 
-interface PaymentMethodDialogProps {
+// Inline Payment Sections
+interface PaymentSectionProps {
   payment: PendingPaymentItem;
-  onClose: () => void;
-  onSelectMethod: (method: "online" | "cheque" | "insurance") => void;
-}
-
-function PaymentMethodDialog({ payment, onClose, onSelectMethod }: PaymentMethodDialogProps) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/20 backdrop-blur-md">
-      <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4">
-        <div className="p-6 border-b border-gray-200 flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-bold text-gray-900">Select Payment Method</h2>
-            <p className="text-sm text-gray-600 mt-1">
-              Payment for {payment.service_name || "Consultation"} - {formatCurrency(payment.final_amount)}
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
-          >
-            ×
-          </button>
-        </div>
-
-        <div className="p-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <button
-              onClick={() => onSelectMethod("online")}
-              className="flex flex-col items-center justify-center gap-3 p-6 rounded-xl border-2 border-blue-500 bg-blue-50 text-blue-700 hover:bg-blue-100 transition group"
-            >
-              <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center text-3xl group-hover:scale-110 transition">
-                💳
-              </div>
-              <span className="font-semibold text-lg">Online Payment</span>
-              <span className="text-xs text-blue-600">Pay with Credit/Debit Card</span>
-            </button>
-            
-            <button
-              onClick={() => onSelectMethod("cheque")}
-              className="flex flex-col items-center justify-center gap-3 p-6 rounded-xl border-2 border-green-500 bg-green-50 text-green-700 hover:bg-green-100 transition group"
-            >
-              <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center text-3xl group-hover:scale-110 transition">
-                📄
-              </div>
-              <span className="font-semibold text-lg">Cheque</span>
-              <span className="text-xs text-green-600">Upload Cheque Images</span>
-            </button>
-            
-            <button
-              onClick={() => onSelectMethod("insurance")}
-              className="flex flex-col items-center justify-center gap-3 p-6 rounded-xl border-2 border-purple-500 bg-purple-50 text-purple-700 hover:bg-purple-100 transition group"
-            >
-              <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center text-3xl group-hover:scale-110 transition">
-                🏥
-              </div>
-              <span className="font-semibold text-lg">Insurance</span>
-              <span className="text-xs text-purple-600">Submit Insurance Claim</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="p-6 border-t border-gray-200 flex justify-end">
-          <button
-            onClick={onClose}
-            className="px-6 py-2 bg-gray-100 text-gray-700 font-medium rounded-lg hover:bg-gray-200"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-interface PaymentModalProps {
-  payment: PendingPaymentItem;
-  method: "online" | "cheque" | "insurance";
-  onClose: () => void;
+  totalAmount?: number;
+  setError: (error: string | null) => void;
+  setIsSubmitting: (submitting: boolean) => void;
   onSuccess: () => void;
+  formRef: React.RefObject<HTMLFormElement>;
 }
 
-function PaymentModal({ payment, method, onClose, onSuccess }: PaymentModalProps) {
-  if (method === "online") {
-    return <OnlinePaymentForm payment={payment} onClose={onClose} onSuccess={onSuccess} />;
-  } else if (method === "cheque") {
-    return <ChequePaymentForm payment={payment} onClose={onClose} onSuccess={onSuccess} />;
-  } else {
-    return <InsurancePaymentForm payment={payment} onClose={onClose} onSuccess={onSuccess} />;
-  }
-}
-
-function OnlinePaymentForm({ payment, onClose, onSuccess }: PaymentModalProps) {
+function OnlinePaymentSection({ payment, setError, setIsSubmitting, onSuccess, formRef }: PaymentSectionProps) {
   const [cardNumber, setCardNumber] = useState("");
   const [cardholderName, setCardholderName] = useState("");
   const [expiryMonth, setExpiryMonth] = useState("");
   const [expiryYear, setExpiryYear] = useState("");
   const [cvv, setCvv] = useState("");
   const [saveCard, setSaveCard] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [savedCards, setSavedCards] = useState<SavedPaymentCard[]>([]);
   const [useSavedCard, setUseSavedCard] = useState<number | null>(null);
 
@@ -643,13 +674,12 @@ function OnlinePaymentForm({ payment, onClose, onSuccess }: PaymentModalProps) {
         expiryYearNum = savedCard.expiry_year;
         cardholderNameValue = savedCard.cardholder_name || "";
       } else {
-        // Extract last 4 digits from card number
         const cleaned = cardNumber.replace(/\s/g, "");
         if (cleaned.length < 4) {
           throw new Error("Invalid card number");
         }
         cardLastFour = cleaned.slice(-4);
-        cardBrand = cleaned.startsWith("4") ? "Visa" : "Mastercard"; // Simple detection
+        cardBrand = cleaned.startsWith("4") ? "Visa" : "Mastercard";
         expiryMonthNum = parseInt(expiryMonth);
         expiryYearNum = parseInt(expiryYear);
         cardholderNameValue = cardholderName;
@@ -674,187 +704,145 @@ function OnlinePaymentForm({ payment, onClose, onSuccess }: PaymentModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/20 backdrop-blur-md">
-      <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-        <div className="p-6 border-b border-gray-200 flex items-center justify-between">
-          <h2 className="text-xl font-bold text-gray-900">Online Payment</h2>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
+    <form ref={formRef} onSubmit={handleSubmit} className="border-2 border-blue-200 rounded-xl p-5 bg-blue-50/30 space-y-4">
+      <h4 className="font-semibold text-gray-900">Card Payment Details</h4>
+      <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+        <p className="text-xs text-green-800">
+          ✓ Instant confirmation! Your payment will be processed immediately and your appointment will be confirmed right away.
+        </p>
+      </div>
+      
+      {savedCards.length > 0 && (
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Use Saved Card</label>
+          <select
+            value={useSavedCard || ""}
+            onChange={(e) => setUseSavedCard(e.target.value ? parseInt(e.target.value) : null)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
           >
-            ×
-          </button>
+            <option value="">Enter new card</option>
+            {savedCards.map((card) => (
+              <option key={card.id} value={card.id}>
+                {card.card_brand} •••• {card.card_last_four} (Exp: {card.expiry_month}/{card.expiry_year})
+              </option>
+            ))}
+          </select>
         </div>
+      )}
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-6">
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <p className="text-sm font-medium text-blue-900">Payment Amount</p>
-            <p className="text-2xl font-bold text-blue-900 mt-1">
-              {formatCurrency(payment.final_amount)}
-            </p>
-            {payment.discount_amount > 0 && (
-              <p className="text-sm text-blue-700 mt-1">
-                Original: {formatCurrency(payment.base_amount)} | Discount:{" "}
-                {formatCurrency(payment.discount_amount)}
-              </p>
-            )}
+      {!useSavedCard && (
+        <>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Card Number <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={cardNumber}
+              onChange={(e) => {
+                const value = e.target.value.replace(/\s/g, "");
+                const formatted = value.match(/.{1,4}/g)?.join(" ") || value;
+                setCardNumber(formatted.slice(0, 19));
+              }}
+              placeholder="1234 5678 9012 3456"
+              required
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+            />
           </div>
 
-          {error && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-              {error}
-            </div>
-          )}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Cardholder Name <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={cardholderName}
+              onChange={(e) => setCardholderName(e.target.value)}
+              placeholder="John Doe"
+              required
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+            />
+          </div>
 
-          {savedCards.length > 0 && (
+          <div className="grid grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Use Saved Card
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Month</label>
               <select
-                value={useSavedCard || ""}
-                onChange={(e) => setUseSavedCard(e.target.value ? parseInt(e.target.value) : null)}
+                value={expiryMonth}
+                onChange={(e) => setExpiryMonth(e.target.value)}
+                required
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
               >
-                <option value="">Enter new card</option>
-                {savedCards.map((card) => (
-                  <option key={card.id} value={card.id}>
-                    {card.card_brand} •••• {card.card_last_four} (Exp: {card.expiry_month}/
-                    {card.expiry_year})
+                <option value="">MM</option>
+                {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => (
+                  <option key={month} value={month.toString().padStart(2, "0")}>
+                    {month.toString().padStart(2, "0")}
                   </option>
                 ))}
               </select>
             </div>
-          )}
-
-          {!useSavedCard && (
-            <>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Card Number <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={cardNumber}
-                  onChange={(e) => {
-                    const value = e.target.value.replace(/\s/g, "");
-                    const formatted = value.match(/.{1,4}/g)?.join(" ") || value;
-                    setCardNumber(formatted.slice(0, 19));
-                  }}
-                  placeholder="1234 5678 9012 3456"
-                  required
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Cardholder Name <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={cardholderName}
-                  onChange={(e) => setCardholderName(e.target.value)}
-                  placeholder="John Doe"
-                  required
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                />
-              </div>
-
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Expiry Month <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={expiryMonth}
-                    onChange={(e) => setExpiryMonth(e.target.value)}
-                    required
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                  >
-                    <option value="">MM</option>
-                    {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => (
-                      <option key={month} value={month.toString().padStart(2, "0")}>
-                        {month.toString().padStart(2, "0")}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Expiry Year <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={expiryYear}
-                    onChange={(e) => setExpiryYear(e.target.value)}
-                    required
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                  >
-                    <option value="">YYYY</option>
-                    {Array.from({ length: 10 }, (_, i) => new Date().getFullYear() + i).map(
-                      (year) => (
-                        <option key={year} value={year}>
-                          {year}
-                        </option>
-                      )
-                    )}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    CVV <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={cvv}
-                    onChange={(e) => setCvv(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                    placeholder="123"
-                    required
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                  />
-                </div>
-              </div>
-
-              <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
-                <input
-                  type="checkbox"
-                  checked={saveCard}
-                  onChange={(e) => setSaveCard(e.target.checked)}
-                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                />
-                Save card for future use
-              </label>
-            </>
-          )}
-
-          <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-lg bg-gray-100 text-gray-700 font-medium hover:bg-gray-200"
-              disabled={isSubmitting}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="px-6 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
-            >
-              {isSubmitting ? "Processing..." : "Submit Payment"}
-            </button>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Year</label>
+              <select
+                value={expiryYear}
+                onChange={(e) => setExpiryYear(e.target.value)}
+                required
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              >
+                <option value="">YYYY</option>
+                {Array.from({ length: 10 }, (_, i) => new Date().getFullYear() + i).map((year) => (
+                  <option key={year} value={year}>
+                    {year}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">CVV</label>
+              <input
+                type="text"
+                value={cvv}
+                onChange={(e) => setCvv(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                placeholder="123"
+                required
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              />
+            </div>
           </div>
-        </form>
-      </div>
-    </div>
+
+          <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+            <input
+              type="checkbox"
+              checked={saveCard}
+              onChange={(e) => setSaveCard(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            Save card for future use
+          </label>
+        </>
+      )}
+    </form>
   );
 }
 
-function ChequePaymentForm({ payment, onClose, onSuccess }: PaymentModalProps) {
+function ChequePaymentSection({ payment, setError, setIsSubmitting, onSuccess, formRef }: PaymentSectionProps) {
   const [frontImage, setFrontImage] = useState<File | null>(null);
   const [backImage, setBackImage] = useState<File | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+
+  const validateFileType = (file: File): boolean => {
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    return allowedTypes.includes(file.type.toLowerCase());
+  };
+
+  const handleFileChange = (file: File | null, setter: (file: File | null) => void, label: string) => {
+    if (file && !validateFileType(file)) {
+      setError(`Invalid file type for ${label}. Please upload JPG, JPEG, PNG, or WEBP images only.`);
+      setter(null);
+      return;
+    }
+    setError(null);
+    setter(file);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -865,13 +853,20 @@ function ChequePaymentForm({ payment, onClose, onSuccess }: PaymentModalProps) {
       return;
     }
 
-    setIsSubmitting(true);
+    // Validate file types before submission
+    if (!validateFileType(frontImage)) {
+      setError("Invalid file type for front image. Please upload JPG, JPEG, PNG, or WEBP images only.");
+      return;
+    }
 
+    if (!validateFileType(backImage)) {
+      setError("Invalid file type for back image. Please upload JPG, JPEG, PNG, or WEBP images only.");
+      return;
+    }
+
+    setIsSubmitting(true);
     try {
-      await patientFinanceAPI.submitChequePayment(payment.appointment_id, [
-        frontImage,
-        backImage,
-      ]);
+      await patientFinanceAPI.submitChequePayment(payment.appointment_id, [frontImage, backImage]);
       onSuccess();
     } catch (err: any) {
       setError(err.detail || err.message || "Failed to submit cheque payment. Please try again.");
@@ -881,98 +876,52 @@ function ChequePaymentForm({ payment, onClose, onSuccess }: PaymentModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/20 backdrop-blur-md">
-      <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4">
-        <div className="p-6 border-b border-gray-200 flex items-center justify-between">
-          <h2 className="text-xl font-bold text-gray-900">Cheque Payment</h2>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
-          >
-            ×
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="p-6 space-y-6">
-          <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-            <p className="text-sm font-medium text-green-900">Payment Amount</p>
-            <p className="text-2xl font-bold text-green-900 mt-1">
-              {formatCurrency(payment.final_amount)}
-            </p>
-            <p className="text-sm text-green-700 mt-2">
-              Please upload self-attested photos of the cheque (front and back)
-            </p>
-          </div>
-
-          {error && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-              {error}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Cheque Front <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => setFrontImage(e.target.files?.[0] || null)}
-                required
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-200"
-              />
-              {frontImage && (
-                <p className="text-xs text-gray-500 mt-1">{frontImage.name}</p>
-              )}
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Cheque Back <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => setBackImage(e.target.files?.[0] || null)}
-                required
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-200"
-              />
-              {backImage && (
-                <p className="text-xs text-gray-500 mt-1">{backImage.name}</p>
-              )}
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-lg bg-gray-100 text-gray-700 font-medium hover:bg-gray-200"
-              disabled={isSubmitting}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting || !frontImage || !backImage}
-              className="px-6 py-2 rounded-lg bg-green-600 text-white font-medium hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
-            >
-              {isSubmitting ? "Submitting..." : "Submit Cheque"}
-            </button>
-          </div>
-        </form>
+    <form ref={formRef} onSubmit={handleSubmit} className="border-2 border-green-200 rounded-xl p-5 bg-green-50/30 space-y-4">
+      <h4 className="font-semibold text-gray-900">Upload Cheque Images</h4>
+      <p className="text-sm text-gray-600">Please upload self-attested photos of the cheque (front and back)</p>
+      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+        <p className="text-xs text-yellow-800">
+          ⓘ Your cheque images will be sent to the doctor for approval. Payment will remain pending until the doctor approves it. Once approved, your appointment will be confirmed.
+        </p>
       </div>
-    </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Cheque Front <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="file"
+            accept=".jpg,.jpeg,.png,.webp"
+            onChange={(e) => handleFileChange(e.target.files?.[0] || null, setFrontImage, "Cheque Front")}
+            required
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-200"
+          />
+          {frontImage && <p className="text-xs text-green-600 mt-1">✓ {frontImage.name}</p>}
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Cheque Back <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="file"
+            accept=".jpg,.jpeg,.png,.webp"
+            onChange={(e) => handleFileChange(e.target.files?.[0] || null, setBackImage, "Cheque Back")}
+            required
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-200"
+          />
+          {backImage && <p className="text-xs text-green-600 mt-1">✓ {backImage.name}</p>}
+        </div>
+      </div>
+      <p className="text-xs text-gray-500">Accepted formats: JPG, JPEG, PNG, WEBP only</p>
+    </form>
   );
 }
 
-function InsurancePaymentForm({ payment, onClose, onSuccess }: PaymentModalProps) {
+function InsurancePaymentSection({ payment, setError, setIsSubmitting, onSuccess, formRef }: PaymentSectionProps) {
   const [insurancePolicies, setInsurancePolicies] = useState<InsurancePolicy[]>([]);
   const [selectedPolicyId, setSelectedPolicyId] = useState<string>("");
-  const [files, setFiles] = useState<File[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     insuranceAPI
@@ -991,7 +940,7 @@ function InsurancePaymentForm({ payment, onClose, onSuccess }: PaymentModalProps
         setError("Failed to load insurance policies");
       })
       .finally(() => setIsLoading(false));
-  }, []);
+  }, [setError]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1003,12 +952,10 @@ function InsurancePaymentForm({ payment, onClose, onSuccess }: PaymentModalProps
     }
 
     setIsSubmitting(true);
-
     try {
       await patientFinanceAPI.submitInsurancePayment(
         payment.appointment_id,
-        selectedPolicyId,
-        files.length > 0 ? files : undefined
+        selectedPolicyId
       );
       onSuccess();
     } catch (err: any) {
@@ -1018,11 +965,124 @@ function InsurancePaymentForm({ payment, onClose, onSuccess }: PaymentModalProps
     }
   };
 
+  const selectedPolicy = useMemo(() => {
+    return insurancePolicies.find(p => p.id === selectedPolicyId);
+  }, [insurancePolicies, selectedPolicyId]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/20 backdrop-blur-md">
-      <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-        <div className="p-6 border-b border-gray-200 flex items-center justify-between">
-          <h2 className="text-xl font-bold text-gray-900">Insurance Payment</h2>
+    <form ref={formRef} onSubmit={handleSubmit} className="border-2 border-purple-200 rounded-xl p-5 bg-purple-50/30 space-y-4">
+      <h4 className="font-semibold text-gray-900">Insurance Claim Details</h4>
+      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+        <p className="text-xs text-yellow-800">
+          ⓘ Your insurance policy details and documents will be sent to the doctor for approval. Payment will remain pending until the doctor approves the insurance claim. Once approved, your appointment will be confirmed.
+        </p>
+      </div>
+
+      {isLoading ? (
+        <p className="text-gray-500">Loading insurance policies...</p>
+      ) : insurancePolicies.length === 0 ? (
+        <div className="border border-yellow-200 bg-yellow-50 rounded-lg p-4">
+          <p className="text-sm text-yellow-800 mb-3">
+            No active insurance policies found. Please add an insurance policy first.
+          </p>
+          <Link
+            href="/dashboard/patient/insurance"
+            className="inline-block px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 text-sm font-medium"
+          >
+            Add Insurance Policy
+          </Link>
+        </div>
+      ) : (
+        <>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Select Insurance Policy <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={selectedPolicyId}
+              onChange={(e) => setSelectedPolicyId(e.target.value)}
+              required
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-200"
+            >
+              {insurancePolicies.map((policy) => (
+                <option key={policy.id} value={policy.id}>
+                  {policy.insurer_name} - {policy.policy_number}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {selectedPolicy && (
+            <div className="border border-purple-200 bg-purple-50/50 rounded-lg p-4 space-y-2">
+              <p className="text-xs font-semibold text-gray-700 uppercase">Policy Information</p>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-gray-600">Provider</p>
+                  <p className="font-medium text-gray-900">{selectedPolicy.insurer_name}</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Policy Number</p>
+                  <p className="font-medium text-gray-900">{selectedPolicy.policy_number}</p>
+                </div>
+                {selectedPolicy.insurance_number && (
+                  <div>
+                    <p className="text-gray-600">Insurance Number</p>
+                    <p className="font-medium text-gray-900">{selectedPolicy.insurance_number}</p>
+                  </div>
+                )}
+                {selectedPolicy.cover_amount && (
+                  <div>
+                    <p className="text-gray-600">Cover Amount</p>
+                    <p className="font-medium text-gray-900">{formatCurrency(selectedPolicy.cover_amount)}</p>
+                  </div>
+                )}
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                By using insurance you consent to send policy document to the doctor for approval.
+              </p>
+            </div>
+          )}
+        </>
+      )}
+    </form>
+  );
+}
+
+interface PaymentDetailsDialogProps {
+  payment: PendingPaymentItem;
+  onClose: () => void;
+  onSuccess: () => void;
+}
+
+function PaymentDetailsDialog({ payment, onClose, onSuccess }: PaymentDetailsDialogProps) {
+  const [selectedMethod, setSelectedMethod] = useState<"online" | "cheque" | "insurance" | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  // Calculate fees
+  const doctorFees = payment.final_amount;
+  const platformFeePercent = 9;
+  const platformFee = (doctorFees * platformFeePercent) / 100;
+  const stateTaxPercent = 8.5;
+  const stateTax = (doctorFees * stateTaxPercent) / 100;
+  const totalAmount = doctorFees + platformFee + stateTax;
+
+  const generateTransactionId = () => {
+    return `INV${payment.appointment_id}${Date.now().toString().slice(-4)}`;
+  };
+
+  const handlePayNow = () => {
+    if (formRef.current) {
+      formRef.current.requestSubmit();
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/20 backdrop-blur-md p-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="p-6 border-b border-gray-200 flex items-center justify-between sticky top-0 bg-white z-10">
+          <h2 className="text-2xl font-bold text-gray-900">Order Details</h2>
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
@@ -1031,15 +1091,105 @@ function InsurancePaymentForm({ payment, onClose, onSuccess }: PaymentModalProps
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-6">
-          <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-            <p className="text-sm font-medium text-purple-900">Payment Amount</p>
-            <p className="text-2xl font-bold text-purple-900 mt-1">
-              {formatCurrency(payment.final_amount)}
-            </p>
-            <p className="text-sm text-purple-700 mt-2">
-              Select your insurance policy and upload relevant documents
-            </p>
+        <div className="p-6 space-y-6">
+          {/* Order Details */}
+          <div className="border-2 border-gray-200 rounded-xl p-5">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Transaction ID</p>
+                <p className="text-base font-semibold text-gray-900">{generateTransactionId()}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Paid to</p>
+                <p className="text-base font-semibold text-gray-900">{payment.doctor_name}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Appointment ID</p>
+                <p className="text-base font-semibold text-gray-900">Avpt{payment.appointment_id}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Paid for</p>
+                <p className="text-base font-semibold text-gray-900">Appointment: {payment.service_name || "Consultation"}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Appointment date</p>
+                <p className="text-base font-semibold text-gray-900">{formatDateTime(payment.appointment_date)}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Amount</p>
+                <p className="text-base font-semibold text-gray-900">{formatCurrency(doctorFees)}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Payment Breakdown */}
+          <div className="border-2 border-gray-200 rounded-xl p-5">
+            <h3 className="text-lg font-bold text-gray-900 mb-4">Payment Breakdown</h3>
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-gray-700">Doctor's Fees</span>
+                <span className="font-semibold text-gray-900">{formatCurrency(doctorFees)}</span>
+              </div>
+              <div className="flex justify-between items-center text-sm">
+                <span className="text-gray-600">Platform fees</span>
+                <span className="text-gray-700">{platformFeePercent}% → {formatCurrency(platformFee)}</span>
+              </div>
+              <div className="flex justify-between items-center text-sm">
+                <span className="text-gray-600">State tax</span>
+                <span className="text-gray-700">{stateTaxPercent}% → {formatCurrency(stateTax)}</span>
+              </div>
+              <div className="border-t border-gray-300 pt-3 flex justify-between items-center text-sm">
+                <span className="text-gray-600">Total</span>
+                <span className="text-gray-700">
+                  {formatCurrency(doctorFees)} + {formatCurrency(platformFee)} + {formatCurrency(stateTax)} →
+                </span>
+              </div>
+              <div className="flex justify-end">
+                <span className="text-3xl font-bold text-gray-900">{formatCurrency(totalAmount)}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Payment Method Selection */}
+          <div>
+            <h3 className="text-lg font-bold text-gray-900 mb-4">Select a payment Method</h3>
+            <div className="grid grid-cols-3 gap-3">
+              <button
+                onClick={() => setSelectedMethod("online")}
+                className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition ${
+                  selectedMethod === "online"
+                    ? "border-blue-500 bg-blue-50"
+                    : "border-gray-300 hover:border-blue-300"
+                }`}
+              >
+                <span className="text-3xl">💳</span>
+                <span className="font-semibold text-sm">CARD</span>
+              </button>
+              
+              <button
+                onClick={() => setSelectedMethod("cheque")}
+                className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition ${
+                  selectedMethod === "cheque"
+                    ? "border-green-500 bg-green-50"
+                    : "border-gray-300 hover:border-green-300"
+                }`}
+              >
+                <span className="text-3xl">📄</span>
+                <span className="font-semibold text-sm">CHEQUE</span>
+              </button>
+              
+              <button
+                onClick={() => setSelectedMethod("insurance")}
+                className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition ${
+                  selectedMethod === "insurance"
+                    ? "border-purple-500 bg-purple-50"
+                    : "border-gray-300 hover:border-purple-300"
+                }`}
+              >
+                <span className="text-3xl">🏥</span>
+                <span className="font-semibold text-sm">INSURANCE</span>
+              </button>
+            </div>
           </div>
 
           {error && (
@@ -1048,83 +1198,33 @@ function InsurancePaymentForm({ payment, onClose, onSuccess }: PaymentModalProps
             </div>
           )}
 
-          {isLoading ? (
-            <p className="text-gray-500">Loading insurance policies...</p>
-          ) : insurancePolicies.length === 0 ? (
-            <div className="border border-yellow-200 bg-yellow-50 rounded-lg p-4">
-              <p className="text-sm text-yellow-800 mb-3">
-                No active insurance policies found. Please add an insurance policy first.
-              </p>
-              <Link
-                href="/dashboard/patient/insurance"
-                className="inline-block px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 text-sm font-medium"
-              >
-                Add Insurance Policy
-              </Link>
-            </div>
-          ) : (
-            <>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Select Insurance Policy <span className="text-red-500">*</span>
-                </label>
-                <select
-                  value={selectedPolicyId}
-                  onChange={(e) => setSelectedPolicyId(e.target.value)}
-                  required
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-200"
-                >
-                  {insurancePolicies.map((policy) => (
-                    <option key={policy.id} value={policy.id}>
-                      {policy.insurer_name} - {policy.policy_number}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Insurance Documents (Optional)
-                </label>
-                <input
-                  type="file"
-                  multiple
-                  accept=".pdf,.jpg,.jpeg,.png,.webp"
-                  onChange={(e) => setFiles(Array.from(e.target.files || []))}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-200"
-                />
-                {files.length > 0 && (
-                  <ul className="mt-2 space-y-1 text-sm text-gray-600">
-                    {files.map((file, idx) => (
-                      <li key={idx}>• {file.name}</li>
-                    ))}
-                  </ul>
-                )}
-                <p className="text-xs text-gray-500 mt-1">
-                  Upload PDFs or images of insurance documents if needed
-                </p>
-              </div>
-            </>
+          {/* Payment Method Forms */}
+          {selectedMethod === "online" && (
+            <OnlinePaymentSection payment={payment} totalAmount={totalAmount} setError={setError} setIsSubmitting={setIsSubmitting} onSuccess={onSuccess} formRef={formRef} />
           )}
 
-          <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+          {selectedMethod === "cheque" && (
+            <ChequePaymentSection payment={payment} setError={setError} setIsSubmitting={setIsSubmitting} onSuccess={onSuccess} formRef={formRef} />
+          )}
+
+          {selectedMethod === "insurance" && (
+            <InsurancePaymentSection payment={payment} setError={setError} setIsSubmitting={setIsSubmitting} onSuccess={onSuccess} formRef={formRef} />
+          )}
+        </div>
+
+        {/* Footer with Total and Pay Now */}
+        {selectedMethod && (
+          <div className="p-6 border-t border-gray-200 flex items-center justify-between sticky bottom-0 bg-white">
+            <div className="text-3xl font-bold text-gray-900">{formatCurrency(totalAmount)}</div>
             <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-lg bg-gray-100 text-gray-700 font-medium hover:bg-gray-200"
+              onClick={handlePayNow}
               disabled={isSubmitting}
+              className="px-8 py-3 bg-blue-600 text-white font-semibold rounded-xl hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition text-lg"
             >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting || insurancePolicies.length === 0}
-              className="px-6 py-2 rounded-lg bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
-            >
-              {isSubmitting ? "Submitting..." : "Submit Insurance"}
+              {isSubmitting ? "Processing..." : "Pay Now"}
             </button>
           </div>
-        </form>
+        )}
       </div>
     </div>
   );

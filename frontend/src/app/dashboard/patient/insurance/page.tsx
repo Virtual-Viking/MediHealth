@@ -423,6 +423,21 @@ function AddPolicyForm({ onSuccess, onCancel }: AddPolicyFormProps) {
 
   const handleInputChange = (event: ChangeEvent<HTMLInputElement>) => {
     const { name, type, checked, value } = event.target;
+    
+    // Validate cover_amount to prevent numeric overflow
+    if (name === "cover_amount" && value) {
+      const numValue = parseFloat(value);
+      if (numValue > 9999999999.99) {
+        setError("Cover amount cannot exceed $9,999,999,999.99");
+        return;
+      } else {
+        // Clear error if previously set for cover amount
+        if (error?.includes("Cover amount")) {
+          setError(null);
+        }
+      }
+    }
+    
     setFormData((prev) => ({
       ...prev,
       [name]: type === "checkbox" ? checked : value,
@@ -474,6 +489,13 @@ function AddPolicyForm({ onSuccess, onCancel }: AddPolicyFormProps) {
     setSubmitting(true);
     setError(null);
 
+    // Validate that at least one file is uploaded
+    if (files.length === 0) {
+      setError("At least one policy document is required. Please upload a document before submitting.");
+      setSubmitting(false);
+      return;
+    }
+
     try {
       const membersPayload = policyMembers
         .filter((member) => member.name.trim().length > 0)
@@ -498,11 +520,7 @@ function AddPolicyForm({ onSuccess, onCancel }: AddPolicyFormProps) {
         policy_members: membersPayload.length ? membersPayload : undefined,
       };
 
-      if (files.length) {
-        await insuranceAPI.createPolicyWithFiles(payload, files);
-      } else {
-        await insuranceAPI.createPolicy(payload);
-      }
+      await insuranceAPI.createPolicyWithFiles(payload, files);
 
       resetForm();
       onSuccess();
@@ -561,6 +579,7 @@ function AddPolicyForm({ onSuccess, onCancel }: AddPolicyFormProps) {
           name="cover_amount"
             type="number"
           min="0"
+          max="9999999999.99"
           step="0.01"
             value={formData.cover_amount}
             onChange={handleInputChange}
@@ -649,6 +668,7 @@ function AddPolicyForm({ onSuccess, onCancel }: AddPolicyFormProps) {
       <div>
         <label className="block text-sm font-medium text-gray-700">
           Policy documents (up to {MAX_FILES} files)
+          <span className="text-red-600"> *</span>
         </label>
         <p className="text-xs text-gray-500">
           Accepted types: PDF, JPG, PNG, WEBP. Each file must be under 10 MB.
@@ -659,12 +679,13 @@ function AddPolicyForm({ onSuccess, onCancel }: AddPolicyFormProps) {
           accept=".pdf,.jpg,.jpeg,.png,.webp"
           onChange={handleFileChange}
           className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+          required
         />
         {files.length > 0 && (
-          <ul className="mt-2 space-y-1 text-sm text-gray-600">
+          <ul className="mt-2 space-y-1 text-sm text-green-600">
             {files.map((file) => (
               <li key={file.name}>
-                {file.name} · {(file.size / 1024).toFixed(1)} KB
+                ✓ {file.name} · {(file.size / 1024).toFixed(1)} KB
               </li>
             ))}
           </ul>
@@ -709,6 +730,7 @@ function Field({
   value: string;
   onChange: (event: ChangeEvent<HTMLInputElement>) => void;
   min?: string;
+  max?: string;
   step?: string;
 }) {
   return (
@@ -724,6 +746,9 @@ function Field({
         required={required}
         className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
       />
+      {name === "cover_amount" && (
+        <p className="text-xs text-gray-500 mt-1">Maximum: $9,999,999,999.99</p>
+      )}
     </label>
   );
 }
