@@ -165,12 +165,17 @@ async def get_pending_payments(
     current_user=Depends(get_current_doctor),
     session: AsyncSession = Depends(get_session),
 ):
-    """Get all appointments with payment_pending status for the doctor"""
-    # Get all appointments with payment_pending status
+    """Get all appointments with payments for the doctor (both pending and completed)"""
+    from sqlalchemy import or_
+    
+    # Get all appointments with payment_pending or confirmed status (to show payment history)
     stmt = select(Appointment).where(
         Appointment.doctor_user_id == current_user.id,
-        Appointment.status == "payment_pending",
-    ).order_by(Appointment.appointment_date.asc())
+        or_(
+            Appointment.status == "payment_pending",
+            Appointment.status == "confirmed"
+        )
+    ).order_by(Appointment.appointment_date.desc())
 
     result = await session.execute(stmt)
     appointments = result.scalars().all()
@@ -235,7 +240,7 @@ async def get_pending_payments(
                     service_id=service_id,
                     base_amount=base_amount,
                     discount_amount=0.0,
-                    payment_method="online",  # Default, will be updated when payment is submitted
+                    payment_method=None,  # Will be set when patient chooses payment method
                 )
                 payment_id = payment.id
                 payment_status = payment.payment_status
@@ -262,6 +267,8 @@ async def get_pending_payments(
                 payment_id=payment_id,
                 payment_status=payment_status,
                 payment_method=payment_method,
+                payment_created_at=payment.created_at if payment else None,
+                payment_updated_at=payment.updated_at if payment else None,
             )
         )
 

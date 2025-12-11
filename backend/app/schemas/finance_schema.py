@@ -132,6 +132,8 @@ class PendingPaymentItem(BaseModel):
     payment_id: Optional[int]
     payment_status: Optional[str]
     payment_method: Optional[str]
+    payment_created_at: Optional[datetime] = None  # When payment record was created
+    payment_updated_at: Optional[datetime] = None  # When payment was last updated/completed
 
     class Config:
         from_attributes = True

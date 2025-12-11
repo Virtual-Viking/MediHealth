@@ -194,6 +194,8 @@ async def get_pending_payments(
                 payment_id=payment_id,
                 payment_status=payment_status,
                 payment_method=payment_method,
+                payment_created_at=payment.created_at if payment else None,
+                payment_updated_at=payment.updated_at if payment else None,
             )
         )
 

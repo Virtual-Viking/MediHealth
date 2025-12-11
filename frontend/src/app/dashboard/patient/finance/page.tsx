@@ -174,6 +174,11 @@ export default function FinancePage() {
         case "appointment_date":
           compareValue = new Date(a.appointment_date).getTime() - new Date(b.appointment_date).getTime();
           break;
+        case "payment_updated_at":
+          const aDate = a.payment_updated_at ? new Date(a.payment_updated_at).getTime() : 0;
+          const bDate = b.payment_updated_at ? new Date(b.payment_updated_at).getTime() : 0;
+          compareValue = aDate - bDate;
+          break;
         case "doctor_name":
           compareValue = a.doctor_name.localeCompare(b.doctor_name);
           break;
@@ -434,6 +439,15 @@ export default function FinancePage() {
                               </div>
                             </th>
                             <th 
+                              onClick={() => handleSort("payment_updated_at")}
+                              className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider cursor-pointer hover:bg-gray-100 select-none"
+                            >
+                              <div className="flex items-center gap-1">
+                                Transaction Date
+                                <SortIcon field="payment_updated_at" />
+                              </div>
+                            </th>
+                            <th 
                               onClick={() => handleSort("doctor_name")}
                               className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider cursor-pointer hover:bg-gray-100 select-none"
                             >
@@ -529,7 +543,10 @@ function PendingPaymentRow({ payment, onPayNow }: PendingPaymentRowProps) {
   return (
     <tr className="hover:bg-gray-50">
       <td className="px-4 py-3 text-sm text-gray-900">APT{payment.appointment_id}</td>
-      <td className="px-4 py-3 text-sm text-gray-600">{formatDate(payment.appointment_date)}</td>
+      <td className="px-4 py-3">
+        <div className="text-xs text-gray-500 uppercase tracking-wide">Appointment</div>
+        <div className="text-sm text-gray-900 font-medium">{formatDate(payment.appointment_date)}</div>
+      </td>
       <td className="px-4 py-3">
         <div className="flex items-center gap-2">
           {payment.doctor_photo_url ? (
@@ -595,7 +612,17 @@ function TransactionHistoryRow({ payment }: TransactionHistoryRowProps) {
   return (
     <tr className="hover:bg-gray-50">
       <td className="px-4 py-3 text-sm text-gray-900">APT{payment.appointment_id}</td>
-      <td className="px-4 py-3 text-sm text-gray-600">{formatDate(payment.appointment_date)}</td>
+      <td className="px-4 py-3">
+        <div className="text-xs text-gray-500 uppercase tracking-wide">Appointment</div>
+        <div className="text-sm text-gray-900 font-medium">{formatDate(payment.appointment_date)}</div>
+      </td>
+      <td className="px-4 py-3">
+        {payment.payment_updated_at ? (
+          <div className="text-sm text-gray-900">{formatDateTime(payment.payment_updated_at)}</div>
+        ) : (
+          <div className="text-sm text-gray-400">-</div>
+        )}
+      </td>
       <td className="px-4 py-3">
         <div className="flex items-center gap-2">
           {payment.doctor_photo_url ? (

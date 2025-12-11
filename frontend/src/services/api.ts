@@ -1850,6 +1850,8 @@ export interface PendingPaymentItem {
   payment_id?: number | null;
   payment_status?: string | null;
   payment_method?: string | null;
+  payment_created_at?: string | null;
+  payment_updated_at?: string | null;
 }
 
 export interface OnlinePaymentRequest {
