@@ -430,7 +430,7 @@ async def submit_cheque_payment(
             file_size=file_data["size"],
         )
 
-    # Auto-share with doctor
+    # Auto-share with doctor (this commits internally)
     await patient_file_crud.upsert_file_batch_share(
         file_batch_id=batch.id,
         patient_user_id=current_user.id,
@@ -445,6 +445,8 @@ async def submit_cheque_payment(
     payment.payment_method = "cheque"
     await session.commit()
     await session.refresh(payment)
+
+    print(f"[CHEQUE PAYMENT] Payment updated successfully: ID={payment.id}, cheque_batch_id={payment.cheque_batch_id}, payment_method={payment.payment_method}")
 
     return payment
 
@@ -576,13 +578,14 @@ async def submit_insurance_payment(
 
         insurance_batch_id = batch.id
 
-        # Auto-share with doctor
+        # Auto-share with doctor (this commits internally)
         await patient_file_crud.upsert_file_batch_share(
-            session=session,
             file_batch_id=batch.id,
             patient_user_id=current_user.id,
             doctor_user_id=appointment.doctor_user_id,
             appointment_id=appointment_id,
+            appointment_request_id=None,
+            session=session,
         )
 
     # Update payment with insurance info
@@ -591,6 +594,8 @@ async def submit_insurance_payment(
     payment.payment_method = "insurance"
     await session.commit()
     await session.refresh(payment)
+
+    print(f"[INSURANCE PAYMENT] Payment updated successfully: ID={payment.id}, insurance_batch_id={payment.insurance_batch_id}, payment_method={payment.payment_method}")
 
     return payment
 

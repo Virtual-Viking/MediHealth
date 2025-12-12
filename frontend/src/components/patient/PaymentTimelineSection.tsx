@@ -79,7 +79,7 @@ export default function PaymentTimelineSection({ payments, isDoctor = false }: P
       return <span className="px-3 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">Pending</span>;
     }
     if (status === "completed" || status === "paid") {
-      return <span className="px-3 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full">Paid</span>;
+      return <span className="px-3 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full">{isDoctor ? "Received" : "Paid"}</span>;
     }
     if (status === "failed") {
       return <span className="px-3 py-1 text-xs font-medium bg-red-100 text-red-800 rounded-full">Failed</span>;

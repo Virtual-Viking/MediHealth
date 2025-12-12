@@ -87,9 +87,21 @@ export default function FinancePage() {
     fetchPendingPayments();
   };
 
-  // Separate pending payments (Section 1)
+  // Separate pending payments (Section 1) - only those NOT initiated yet (no payment_method)
   const pendingPayments = useMemo(() => {
-    return allPayments.filter(p => !p.payment_status || p.payment_status === "pending" || p.payment_status === "draft");
+    return allPayments.filter(p => 
+      (!p.payment_status || p.payment_status === "pending" || p.payment_status === "draft") &&
+      !p.payment_method // Not initiated yet
+    );
+  }, [allPayments]);
+
+  // Payments awaiting doctor approval (Section 1b) - initiated but pending approval
+  const pendingApprovalPayments = useMemo(() => {
+    return allPayments.filter(p => 
+      p.payment_status === "pending" &&
+      p.payment_method && // Has payment method (cheque or insurance)
+      (p.payment_method === "cheque" || p.payment_method === "insurance")
+    );
   }, [allPayments]);
 
   // Calculate summary metrics
@@ -316,6 +328,45 @@ export default function FinancePage() {
                 )}
               </div>
             </div>
+
+            {/* SECTION 1B: Pending Approval */}
+            {pendingApprovalPayments.length > 0 && (
+              <div className="mb-8">
+                <h2 className="text-xl font-bold text-gray-900 mb-4">Pending Approval</h2>
+                <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+                  <div className="p-6">
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
+                      <p className="text-sm text-yellow-800">
+                        ⓘ These payments are awaiting doctor approval. You will be notified once the doctor reviews and approves your payment.
+                      </p>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-gray-50 border-b border-gray-200">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Transaction Id</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Date</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Paid to</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Payment Method</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Amount</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Status</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">Paid for</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                          {pendingApprovalPayments.map((payment) => (
+                            <PendingApprovalRow
+                              key={payment.appointment_id}
+                              payment={payment}
+                            />
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* SECTION 2: Transaction History */}
             <div className="bg-white rounded-xl shadow-sm overflow-hidden">
@@ -577,6 +628,55 @@ function PendingPaymentRow({ payment, onPayNow }: PendingPaymentRowProps) {
         >
           PAY NOW
         </button>
+      </td>
+    </tr>
+  );
+}
+
+// Component for Pending Approval Section (Section 1B)
+interface PendingApprovalRowProps {
+  payment: PendingPaymentItem;
+}
+
+function PendingApprovalRow({ payment }: PendingApprovalRowProps) {
+  return (
+    <tr className="hover:bg-gray-50">
+      <td className="px-4 py-3 text-sm text-gray-900">APT{payment.appointment_id}</td>
+      <td className="px-4 py-3">
+        <div className="text-xs text-gray-500 uppercase tracking-wide">Appointment</div>
+        <div className="text-sm text-gray-900 font-medium">{formatDate(payment.appointment_date)}</div>
+      </td>
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-2">
+          {payment.doctor_photo_url ? (
+            <Image
+              src={payment.doctor_photo_url}
+              alt={payment.doctor_name}
+              width={24}
+              height={24}
+              className="rounded-full object-cover"
+            />
+          ) : (
+            <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-xs">
+              👤
+            </div>
+          )}
+          <span className="text-sm text-gray-900">{payment.doctor_name}</span>
+        </div>
+      </td>
+      <td className="px-4 py-3">
+        <span className="px-3 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded-full uppercase">
+          {payment.payment_method}
+        </span>
+      </td>
+      <td className="px-4 py-3 text-sm font-medium text-gray-900">{formatCurrency(payment.final_amount)}</td>
+      <td className="px-4 py-3">
+        <span className="px-3 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">
+          Awaiting Approval
+        </span>
+      </td>
+      <td className="px-4 py-3 text-sm text-gray-600">
+        Appointment: {payment.appointment_id}
       </td>
     </tr>
   );

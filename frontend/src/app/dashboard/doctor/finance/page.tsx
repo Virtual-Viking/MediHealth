@@ -722,7 +722,7 @@ function TransactionHistorySection() {
     if (status === "completed" || status === "paid") {
       return (
         <span className="px-3 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full">
-          Paid
+          Received
         </span>
       );
     }
@@ -786,7 +786,7 @@ function TransactionHistorySection() {
                     <option value="all">All Status</option>
                     <option value="pending">Pending</option>
                     <option value="completed">Completed</option>
-                    <option value="paid">Paid</option>
+                    <option value="paid">Received</option>
                     <option value="overdue">Overdue</option>
                     <option value="failed">Failed</option>
                   </select>
@@ -868,7 +868,7 @@ function TransactionHistorySection() {
                           </div>
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider">
-                          Paid for
+                          Received for
                         </th>
                       </tr>
                     </thead>
