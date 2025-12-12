@@ -443,22 +443,23 @@ async def get_payment_history(
 ):
     """Get all payment history for doctor (all appointments with payments)"""
     try:
-        # Fetch all appointments for this doctor (regardless of status)
-        stmt = (
-            select(Appointment)
-            .where(Appointment.doctor_user_id == current_user.id)
-            .options(selectinload(Appointment.patient), selectinload(Appointment.payment))
-        )
+        # Fetch all appointments for this doctor
+        stmt = select(Appointment).where(Appointment.doctor_user_id == current_user.id)
         result = await session.execute(stmt)
         appointments = result.scalars().all()
 
         pending_payments = []
         for appointment in appointments:
-            patient = appointment.patient
+            # Get patient info
+            patient = await auth_crud.get_user_by_id(appointment.patient_user_id, session)
             patient_name = f"{patient.first_name} {patient.last_name}".strip() if patient else "Unknown"
 
-            payment = appointment.payment
-            payment_id = payment.payment_id if payment else None
+            # Get payment info
+            payment_stmt = select(Payment).where(Payment.appointment_id == appointment.appointment_id)
+            payment_result = await session.execute(payment_stmt)
+            payment = payment_result.scalar_one_or_none()
+            
+            payment_id = payment.id if payment else None
             payment_status = payment.payment_status if payment else None
             payment_method = payment.payment_method if payment else None
 
