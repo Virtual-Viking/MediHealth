@@ -2096,3 +2096,64 @@ export const doctorFinanceAPI = {
   },
 };
 
+// Default API object for generic requests (used by chat and other modules)
+const api = {
+  get: async <T = unknown>(path: string, options?: Omit<APIRequestOptions, 'method'>) => {
+    return apiFetch<T>(path, { ...options, method: 'GET' });
+  },
+  
+  post: async <T = unknown>(path: string, body?: any, options?: Omit<APIRequestOptions, 'method' | 'body'>) => {
+    const requestOptions: APIRequestOptions = { ...options, method: 'POST' };
+    
+    if (body instanceof FormData) {
+      requestOptions.body = body;
+    } else if (body) {
+      requestOptions.body = JSON.stringify(body);
+      requestOptions.headers = {
+        'Content-Type': 'application/json',
+        ...options?.headers as any,
+      };
+    }
+    
+    return apiFetch<T>(path, requestOptions);
+  },
+  
+  put: async <T = unknown>(path: string, body?: any, options?: Omit<APIRequestOptions, 'method' | 'body'>) => {
+    const requestOptions: APIRequestOptions = { ...options, method: 'PUT' };
+    
+    if (body instanceof FormData) {
+      requestOptions.body = body;
+    } else if (body) {
+      requestOptions.body = JSON.stringify(body);
+      requestOptions.headers = {
+        'Content-Type': 'application/json',
+        ...options?.headers as any,
+      };
+    }
+    
+    return apiFetch<T>(path, requestOptions);
+  },
+  
+  patch: async <T = unknown>(path: string, body?: any, options?: Omit<APIRequestOptions, 'method' | 'body'>) => {
+    const requestOptions: APIRequestOptions = { ...options, method: 'PATCH' };
+    
+    if (body instanceof FormData) {
+      requestOptions.body = body;
+    } else if (body) {
+      requestOptions.body = JSON.stringify(body);
+      requestOptions.headers = {
+        'Content-Type': 'application/json',
+        ...options?.headers as any,
+      };
+    }
+    
+    return apiFetch<T>(path, requestOptions);
+  },
+  
+  delete: async <T = unknown>(path: string, options?: Omit<APIRequestOptions, 'method'>) => {
+    return apiFetch<T>(path, { ...options, method: 'DELETE', expectJson: false });
+  },
+};
+
+export default api;
+

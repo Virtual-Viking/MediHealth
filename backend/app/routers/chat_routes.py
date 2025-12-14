@@ -75,12 +75,18 @@ async def get_conversations(
     session: AsyncSession = Depends(get_session),
 ):
     """Get all conversations for the current user."""
-    return await get_user_conversations_cached(
-        user_id=current_user.user_id,
-        session=session,
-        limit=limit,
-        offset=offset,
-    )
+    try:
+        conversations = await get_user_conversations_cached(
+            user_id=current_user.user_id,
+            session=session,
+            limit=limit,
+            offset=offset,
+        )
+        return conversations
+    except Exception as e:
+        logger.error(f"Error getting conversations for user {current_user.user_id}: {e}")
+        # Return empty list instead of error to prevent frontend crash
+        return []
 
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationWithParticipants)

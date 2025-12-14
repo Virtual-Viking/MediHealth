@@ -22,6 +22,7 @@ from schemas.chat_schema import (
     ConversationResponse,
     ConversationListItem,
     MessageCreate,
+    ParticipantResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -95,7 +96,7 @@ async def send_message(
     # 7. Broadcast via WebSocket to all participants
     websocket_message = {
         "type": "new_message",
-        "data": message_response.dict(),
+        "data": message_response.model_dump(mode='json'),
     }
     await manager.broadcast_to_conversation(websocket_message, participant_user_ids)
     
@@ -155,7 +156,7 @@ async def get_conversation_messages_cached(
     
     # Cache latest messages (only if no offset/pagination)
     if offset == 0 and not before_message_id and message_responses:
-        cache_data = json.dumps([msg.dict() for msg in message_responses])
+        cache_data = json.dumps([msg.model_dump(mode='json') for msg in message_responses], default=str)
         await set_cache(cache_key, cache_data, ttl=CACHE_TTL)
     
     return message_responses
@@ -226,13 +227,13 @@ async def get_user_conversations_cached(
         
         # Build participant list
         participants = [
-            {
-                "participant_id": str(p.participant_id),
-                "user_id": p.user_id,
-                "joined_at": p.joined_at,
-                "last_read_at": p.last_read_at,
-                "is_active": p.is_active,
-            }
+            ParticipantResponse(
+                participant_id=p.participant_id,
+                user_id=p.user_id,
+                joined_at=p.joined_at,
+                last_read_at=p.last_read_at,
+                is_active=p.is_active,
+            )
             for p in conv.participants
         ]
         
@@ -249,8 +250,12 @@ async def get_user_conversations_cached(
     
     # Cache conversations list
     if offset == 0 and conversation_items:
-        cache_data = json.dumps([conv.dict() for conv in conversation_items])
-        await set_cache(cache_key, cache_data, ttl=CACHE_TTL)
+        try:
+            # Convert to dict with proper serialization (Pydantic V2 uses model_dump)
+            cache_data = json.dumps([conv.model_dump(mode='json') for conv in conversation_items], default=str)
+            await set_cache(cache_key, cache_data, ttl=CACHE_TTL)
+        except Exception as e:
+            logger.warning(f"Failed to cache conversations: {e}")
     
     return conversation_items
 

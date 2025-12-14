@@ -18,6 +18,8 @@ sys.path.insert(0, str(APP_DIR))
 
 from dotenv import load_dotenv  # noqa: E402
 from db.base import Base  # noqa: E402
+# Import all models so Alembic can track them
+import db.models  # noqa: E402, F401
 
 config = context.config
 

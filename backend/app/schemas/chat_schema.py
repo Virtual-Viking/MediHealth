@@ -50,7 +50,11 @@ class MessageBase(BaseModel):
 
 
 class MessageCreate(MessageBase):
-    conversation_id: UUID
+    # conversation_id is in the URL path, not the body
+    # Allow extra fields for frontend compatibility (e.g., attachment_metadata)
+    class Config:
+        extra = "ignore"
+        from_attributes = True
 
 
 class MessageResponse(MessageBase):

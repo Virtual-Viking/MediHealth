@@ -89,3 +89,8 @@ class User(Base):
     account_status_logs: Mapped[List["AccountStatusLog"]] = relationship(
         back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
+    
+    @property
+    def user_id(self) -> int:
+        """Alias for id to maintain backward compatibility."""
+        return self.id
