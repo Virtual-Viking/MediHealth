@@ -158,24 +158,6 @@ export default function DoctorLayout({ children }: DoctorLayoutProps) {
                   </li>
                   <li>
                     <Link
-                      href="/dashboard/doctor/chats"
-                      className={`flex items-center gap-3 px-4 py-2 rounded-lg transition ${
-                        isActive("/dashboard/doctor/chats")
-                          ? "bg-white text-gray-800 font-medium shadow-sm"
-                          : "text-gray-600 hover:bg-white"
-                      }`}
-                    >
-                      <Image
-                        src="/icons/messages.svg"
-                        alt="Chats"
-                        width={20}
-                        height={20}
-                      />
-                      Chats
-                    </Link>
-                  </li>
-                  <li>
-                    <Link
                       href="/dashboard/doctor/reports"
                       className={`flex items-center gap-3 px-4 py-2 rounded-lg transition ${
                         isActive("/dashboard/doctor/reports")

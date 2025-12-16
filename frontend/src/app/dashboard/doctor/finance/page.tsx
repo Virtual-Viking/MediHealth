@@ -257,11 +257,32 @@ function PaymentApprovalsSection() {
 
   const handleReject = async (paymentId: number) => {
     if (!confirm("Are you sure you want to reject this payment?")) return;
+    // Optimistic UI: remove from list and clear viewer; restore if failed
+    setPayments((prev) => prev.filter((p) => p.id !== paymentId));
+    setViewingFiles(null);
+    setFiles([]);
     try {
-      // TODO: Implement reject endpoint
-      alert("Reject functionality coming soon");
+      await doctorFinanceAPI.rejectPayment(paymentId);
+      fetchPayments();
     } catch (err: any) {
-      alert(err.detail || "Failed to reject payment");
+      const msg = (err && (err.detail || err.message)) || "Failed to reject payment";
+      // If backend already rejected or payment is no longer pending, just refresh silently
+      const lower = msg.toLowerCase();
+      const alreadyHandled =
+        lower.includes("not pending") ||
+        lower.includes("not found") ||
+        lower.includes("does not belong");
+      if (alreadyHandled) {
+        fetchPayments();
+        return;
+      }
+      // Revert optimistic update on hard failure
+      setPayments((prev) => {
+        // trigger reload on next fetch
+        fetchPayments();
+        return prev;
+      });
+      alert(msg);
     }
   };
 
@@ -355,7 +376,7 @@ function PaymentApprovalsSection() {
                   </div>
 
                   {/* File Viewer */}
-                  {viewingFiles === payment.id && files.length > 0 && (
+                  {viewingFiles === payment.id && (
                     <div className="mt-3 ml-4 p-4 bg-gray-50 border border-gray-200 rounded-lg">
                       <div className="flex items-center justify-between mb-3">
                         <h4 className="text-sm font-semibold text-gray-900">
@@ -371,31 +392,35 @@ function PaymentApprovalsSection() {
                           ×
                         </button>
                       </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        {files.map((file) => (
-                          <div
-                            key={file.id}
-                            className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg"
-                          >
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium text-gray-900 truncate">
-                                {file.file_name}
-                              </p>
-                              <p className="text-xs text-gray-500">
-                                {(file.file_size / 1024).toFixed(1)} KB
-                              </p>
-                            </div>
-                            <a
-                              href={file.file_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="ml-3 px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 font-medium"
+                      {files.length === 0 ? (
+                        <div className="text-sm text-gray-600">No documents available.</div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-3">
+                          {files.map((file) => (
+                            <div
+                              key={file.id}
+                              className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg"
                             >
-                              View
-                            </a>
-                          </div>
-                        ))}
-                      </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-gray-900 truncate">
+                                  {file.file_name}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {(file.file_size / 1024).toFixed(1)} KB
+                                </p>
+                              </div>
+                              <a
+                                href={file.file_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="ml-3 px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 font-medium"
+                              >
+                                View
+                              </a>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

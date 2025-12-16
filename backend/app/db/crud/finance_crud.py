@@ -355,6 +355,7 @@ async def complete_payment(
     cheque_batch_id: Optional[int] = None,
     insurance_batch_id: Optional[int] = None,
     insurance_policy_id: Optional[str] = None,
+    payment_method: Optional[str] = None,
 ) -> Optional[Payment]:
     """Complete a payment (for online payments)"""
     payment = await get_payment_by_id(session, payment_id)
@@ -372,6 +373,8 @@ async def complete_payment(
         payment.insurance_batch_id = insurance_batch_id
     if insurance_policy_id:
         payment.insurance_policy_id = insurance_policy_id
+    if payment_method:
+        payment.payment_method = payment_method
 
     # Update appointment status to confirmed
     appointment = await session.get(Appointment, payment.appointment_id)
@@ -405,6 +408,49 @@ async def approve_payment(
     appointment = await session.get(Appointment, payment.appointment_id)
     if appointment:
         appointment.status = "confirmed"
+
+    await session.commit()
+    await session.refresh(payment)
+    return payment
+
+
+async def reject_payment(
+    session: AsyncSession,
+    payment_id: int,
+    doctor_user_id: int,
+    *,
+    clear_method: bool = True,
+) -> Optional[Payment]:
+    """
+    Reject a payment (for cheque/insurance payments).
+    - Marks payment_status back to pending so patient can retry.
+    - Optionally clears payment method-specific fields to force new upload/selection.
+    """
+    payment = await get_payment_by_id(session, payment_id)
+    if not payment:
+        return None
+
+    if payment.doctor_user_id != doctor_user_id:
+        return None
+
+    if payment.payment_status != PaymentStatus.pending.value:
+        return None
+
+    # Reset state so patient can try again
+    payment.payment_status = PaymentStatus.pending.value
+
+    if clear_method:
+        payment.payment_method = None
+        payment.transaction_id = None
+        payment.saved_card_id = None
+        payment.cheque_batch_id = None
+        payment.insurance_batch_id = None
+        payment.insurance_policy_id = None
+
+    # Ensure appointment returns to payment_pending
+    appointment = await session.get(Appointment, payment.appointment_id)
+    if appointment:
+        appointment.status = "payment_pending"
 
     await session.commit()
     await session.refresh(payment)

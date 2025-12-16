@@ -175,24 +175,6 @@ export default function PatientLayout({ children }: PatientLayoutProps) {
                   </li>
                   <li>
                     <Link
-                      href="/dashboard/patient/chats"
-                      className={`flex items-center gap-3 px-4 py-2 rounded-lg transition ${
-                        isActive("/dashboard/patient/chats")
-                          ? "bg-white text-gray-800 font-medium shadow-sm"
-                          : "text-gray-600 hover:bg-white"
-                      }`}
-                    >
-                      <Image
-                        src="/icons/messages.svg"
-                        alt="Chats"
-                        width={20}
-                        height={20}
-                      />
-                      Chats
-                    </Link>
-                  </li>
-                  <li>
-                    <Link
                       href="/dashboard/patient/insurance"
                       className={`flex items-center gap-3 px-4 py-2 rounded-lg transition ${
                         isActive("/dashboard/patient/insurance")

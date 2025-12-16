@@ -5,7 +5,6 @@ from . import appointment_request_crud
 from . import notification_crud
 from . import address_crud
 from . import specialty_crud
-from . import chat_crud
 from . import patient_file_crud
 from . import patient_crud
 from . import insurance_crud

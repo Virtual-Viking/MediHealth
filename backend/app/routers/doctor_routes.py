@@ -35,8 +35,33 @@ from services.google_places import (
 )
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
+from sqlalchemy import select, or_
+from sqlalchemy.orm import selectinload
+from db.models.appointment_model import Appointment
+from db.models.finance_model import Payment
+from db.models.patient_file_model import FileBatchShare, FileBatch
+from db.models.user_model import User
+from db.models.patient_model import PatientProfile
 import uuid
 import os
+
+class PatientTimelineItem(BaseModel):
+    type: str
+    title: str
+    detail: Optional[str] = None
+    timestamp: str
+    files: Optional[List[Dict[str, str]]] = None
+
+
+class ConsultingPatient(BaseModel):
+    patient_id: int
+    name: str
+    photo_url: Optional[str] = None
+    status_text: str
+    visits: int
+    upcoming: int
+    timeline: List[PatientTimelineItem]
+
 
 router = APIRouter()
 
@@ -997,6 +1022,203 @@ async def reactivate_doctor_account(
         )
     
     return result
+
+
+@router.get("/patients/consulting", response_model=List[ConsultingPatient])
+async def list_consulting_patients(
+    current_user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """List patients who have interacted with the doctor, with a timeline summary."""
+    appt_result = await session.execute(
+        select(Appointment).where(Appointment.doctor_user_id == current_user.id)
+    )
+    appointments = appt_result.scalars().all()
+
+    if not appointments:
+        return []
+
+    patient_ids = {appt.patient_user_id for appt in appointments if appt.patient_user_id}
+    if not patient_ids:
+        return []
+
+    users_result = await session.execute(
+        select(User)
+        .where(User.id.in_(patient_ids))
+        .options(selectinload(User.patient_profile))
+    )
+    users_map = {u.id: u for u in users_result.scalars().all()}
+
+    payments_result = await session.execute(
+        select(Payment).where(
+            Payment.doctor_user_id == current_user.id,
+            Payment.patient_user_id.in_(patient_ids),
+        )
+    )
+    payments = payments_result.scalars().all()
+    payments_by_appt = {p.appointment_id: p for p in payments}
+
+    # Collect batch ids from payments for file lookup
+    batch_ids: List[int] = []
+    for p in payments:
+        if p.cheque_batch_id:
+            batch_ids.append(p.cheque_batch_id)
+        if p.insurance_batch_id:
+            batch_ids.append(p.insurance_batch_id)
+
+    batches_by_id: Dict[int, FileBatch] = {}
+    if batch_ids:
+        batch_result = await session.execute(
+            select(FileBatch)
+            .where(FileBatch.id.in_(batch_ids))
+            .options(selectinload(FileBatch.files))
+        )
+        for b in batch_result.scalars().all():
+            batches_by_id[b.id] = b
+
+    shares_result = await session.execute(
+        select(FileBatchShare)
+        .where(
+            FileBatchShare.doctor_user_id == current_user.id,
+            FileBatchShare.patient_user_id.in_(patient_ids),
+            FileBatchShare.share_status == "active",
+        )
+        .options(selectinload(FileBatchShare.batch).selectinload(FileBatch.files))
+    )
+    shares_by_patient: Dict[int, List[FileBatchShare]] = {}
+    for share in shares_result.scalars().all():
+        shares_by_patient.setdefault(share.patient_user_id, []).append(share)
+
+    appts_by_patient: Dict[int, List[Appointment]] = {}
+    for appt in appointments:
+        appts_by_patient.setdefault(appt.patient_user_id, []).append(appt)
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    consulting_patients: List[ConsultingPatient] = []
+
+    for patient_id, appts in appts_by_patient.items():
+        user = users_map.get(patient_id)
+        if not user:
+            continue
+
+        visits = sum(
+            1
+            for a in appts
+            if a.status == "confirmed" and a.appointment_date and a.appointment_date < now
+        )
+        upcoming = sum(
+            1
+            for a in appts
+            if a.appointment_date and a.appointment_date >= now
+        )
+
+        payment_pending = any(
+            payments_by_appt.get(a.appointment_id)
+            and payments_by_appt.get(a.appointment_id).payment_status == "pending"
+            for a in appts
+        )
+
+        if visits > 0 or upcoming > 0:
+            status_text = f"{visits} visit{'s' if visits != 1 else ''}, {upcoming} upcoming"
+        elif payment_pending:
+            status_text = "payment pending"
+        else:
+            status_text = "No recent visits"
+
+        events: List[PatientTimelineItem] = []
+        for appt in appts:
+            ts_created = getattr(appt, "created_at", None) or appt.appointment_date
+            if ts_created:
+                events.append(
+                    PatientTimelineItem(
+                        type="appointment",
+                        title="Appointment booked",
+                        detail=f"Status: {appt.status}",
+                        timestamp=ts_created.isoformat(),
+                    )
+                )
+            if appt.status == "confirmed":
+                ts_conf = getattr(appt, "updated_at", None) or appt.appointment_date
+                if ts_conf:
+                    events.append(
+                        PatientTimelineItem(
+                            type="appointment",
+                            title="Appointment confirmed",
+                            detail=None,
+                            timestamp=ts_conf.isoformat(),
+                        )
+                    )
+            payment = payments_by_appt.get(appt.appointment_id)
+            if payment:
+                ts_pay = getattr(payment, "updated_at", None) or getattr(payment, "created_at", None)
+                files_payload = None
+                batch_id = payment.cheque_batch_id or payment.insurance_batch_id
+                if batch_id and batches_by_id.get(batch_id):
+                    files_payload = [
+                        {
+                            "name": f.file_name,
+                            "url": f.file_url,
+                        }
+                        for f in batches_by_id[batch_id].files
+                    ]
+                if ts_pay:
+                    events.append(
+                        PatientTimelineItem(
+                            type="payment",
+                            title=f"Payment {payment.payment_status}",
+                            detail=f"Method: {payment.payment_method or 'N/A'}",
+                            timestamp=ts_pay.isoformat(),
+                            files=files_payload,
+                        )
+                    )
+
+        for share in shares_by_patient.get(patient_id, []):
+            ts_share = getattr(share, "shared_at", None) or getattr(share, "updated_at", None)
+            cat = share.batch.category if share.batch else None
+            files_payload = None
+            if share.batch and share.batch.files:
+                files_payload = [
+                    {
+                        "name": f.file_name,
+                        "url": f.file_url,
+                    }
+                    for f in share.batch.files
+                ]
+            if ts_share:
+                events.append(
+                    PatientTimelineItem(
+                        type="files",
+                        title="Files shared",
+                        detail=f"Category: {cat}" if cat else None,
+                        timestamp=ts_share.isoformat(),
+                        files=files_payload,
+                    )
+                )
+
+        events.sort(key=lambda e: e.timestamp, reverse=True)
+
+        name = " ".join(
+            [p for p in [user.first_name, user.last_name] if p]
+        ).strip()
+        photo_url = None
+        if user.patient_profile and user.patient_profile.photo_url:
+            photo_url = user.patient_profile.photo_url
+
+        consulting_patients.append(
+            ConsultingPatient(
+                patient_id=patient_id,
+                name=name or "Patient",
+                photo_url=photo_url,
+                status_text=status_text,
+                visits=visits,
+                upcoming=upcoming,
+                timeline=events,
+            )
+        )
+
+    return consulting_patients
 
 
 @router.get("/account-status", response_model=AccountStatusInfo)

@@ -90,6 +90,9 @@ async def fix_alembic_version(target_revision: str = None):
             "20250101_add_reschedule_count",
             "20250102_add_account_status",
             "20250103_add_finance_tables",
+            "20250103_fix_payments_service_id",
+            "20251210_fix_insurance_table_schema",
+            "20251211_allow_null_payment_method",
         ]
         
         if target_revision is None:

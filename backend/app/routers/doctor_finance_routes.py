@@ -19,6 +19,7 @@ from db.crud import (
     finance_crud,
     appointment_crud,
     patient_file_crud,
+    notification_crud,
 )
 from db.models.finance_model import Payment, DoctorService
 from db.models.appointment_model import Appointment
@@ -559,6 +560,68 @@ async def approve_payment(
         )
 
     return approved_payment
+
+
+@router.post("/payments/{payment_id}/reject", response_model=PaymentRead)
+async def reject_payment(
+    payment_id: int,
+    current_user=Depends(get_current_doctor),
+    session: AsyncSession = Depends(get_session),
+):
+    """Reject a pending cheque/insurance payment so the patient can try again."""
+    payment = await finance_crud.get_payment_by_id(session, payment_id)
+    if not payment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Payment not found",
+        )
+
+    if payment.doctor_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Payment does not belong to you",
+        )
+
+    if payment.payment_status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Payment is not pending approval",
+        )
+
+    if payment.payment_method not in ["cheque", "insurance"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only cheque and insurance payments can be rejected here",
+        )
+
+    rejected_payment = await finance_crud.reject_payment(
+        session, payment_id, current_user.id, clear_method=True
+    )
+
+    if not rejected_payment:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to reject payment",
+        )
+
+    # Notify patient
+    patient_user_id = rejected_payment.patient_user_id
+    try:
+        await notification_crud.create_notification(
+            session,
+            user_id=patient_user_id,
+            type="general",
+            title="Payment Rejected",
+            message="Your payment was rejected by the doctor. Please submit payment again.",
+            related_entity_type="payment",
+            related_entity_id=rejected_payment.id,
+            appointment_id=rejected_payment.appointment_id,
+        )
+    except Exception:
+        # Do not block rejection if notification fails
+        pass
+
+    return rejected_payment
 
 
 # ==================== View Payment Files ====================

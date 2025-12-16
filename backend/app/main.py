@@ -12,7 +12,6 @@ from routers import (
     appointment_request_routes,
     notification_routes,
     doctor_dashboard_routes,
-    chat_routes,
     patient_file_routes,
     patient_routes,
     insurance_routes,
@@ -84,7 +83,7 @@ async def on_startup():
     try:
         await get_redis_client()
     except Exception as e:
-        print(f"Warning: Redis connection failed: {e}. Chat features may not work properly.")
+        print(f"Warning: Redis connection failed: {e}. Some caching features may not work properly.")
 
 
 # Close Cloud SQL connector on shutdown
@@ -102,7 +101,6 @@ app.include_router(google_calendar_routes.router, prefix="/calendar/google", tag
 app.include_router(appointment_request_routes.router, prefix="/appointment-requests", tags=["appointment-requests"])
 app.include_router(notification_routes.router, prefix="/notifications", tags=["notifications"])
 app.include_router(doctor_dashboard_routes.router, prefix="/doctors", tags=["doctor-dashboard"])
-app.include_router(chat_routes.router, prefix="/chat", tags=["chat"])
 app.include_router(patient_file_routes.router, prefix="/patient-files", tags=["patient-files"])
 app.include_router(insurance_routes.router, prefix="/insurance", tags=["insurance"])
 app.include_router(patient_finance_routes.router, prefix="/patient-finance", tags=["patient-finance"])

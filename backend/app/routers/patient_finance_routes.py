@@ -21,6 +21,7 @@ from db.crud import (
     finance_crud,
     appointment_crud,
     patient_file_crud,
+    insurance_crud,
 )
 from db.models.patient_file_model import FileBatchCategory
 from schemas.finance_schema import (
@@ -268,20 +269,30 @@ async def submit_online_payment(
     transaction_id = f"TXN-{uuid.uuid4().hex[:12].upper()}"
 
     # Complete the payment
-    payment = await finance_crud.complete_payment(
-        session,
-        payment.id,
-        transaction_id=transaction_id,
-        saved_card_id=saved_card_id,
-    )
-
-    if not payment:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to process payment",
+    try:
+        payment = await finance_crud.complete_payment(
+            session,
+            payment.id,
+            transaction_id=transaction_id,
+            saved_card_id=saved_card_id,
+            payment_method="online",
         )
 
-    return payment
+        if not payment:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to process payment",
+            )
+
+        return payment
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"Error completing online payment: {error_trace}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to submit payment: {str(e)}",
+        )
 
 
 # ==================== Cheque Payment ====================
@@ -422,12 +433,12 @@ async def submit_cheque_payment(
     # Create file records
     for file_data in uploaded_file_urls:
         await patient_file_crud.create_patient_file(
-            session,
             file_batch_id=batch.id,
             file_name=file_data["filename"],
             file_url=file_data["file_url"],
             file_type=file_data["content_type"],
             file_size=file_data["size"],
+            session=session,
         )
 
     # Auto-share with doctor (this commits internally)
@@ -484,16 +495,10 @@ async def submit_insurance_payment(
             detail="Appointment is not in payment_pending status",
         )
 
-    # Verify insurance policy belongs to patient
-    from db.models.insurance_model import PatientInsurancePolicy
-    from sqlalchemy import select
-
-    stmt = select(PatientInsurancePolicy).where(
-        PatientInsurancePolicy.id == UUID(insurance_policy_id),
-        PatientInsurancePolicy.patient_user_id == current_user.id,
+    # Verify insurance policy belongs to patient (with documents loaded)
+    policy = await insurance_crud.get_insurance_policy(
+        UUID(insurance_policy_id), current_user.id, session
     )
-    result = await session.execute(stmt)
-    policy = result.scalar_one_or_none()
 
     if not policy:
         raise HTTPException(
@@ -517,7 +522,7 @@ async def submit_insurance_payment(
             detail="Payment has already been processed",
         )
 
-    # Upload files if provided
+    # Upload files if provided; otherwise reuse existing policy documents
     insurance_batch_id = None
     if files and len(files) > 0:
         storage_service = get_storage_service()
@@ -532,7 +537,6 @@ async def submit_insurance_payment(
             })
 
         # Create file batch
-        from db.crud import patient_file_crud
         batch = await patient_file_crud.create_file_batch(
             patient_user_id=current_user.id,
             category=FileBatchCategory.insurance_payment.value,
@@ -568,12 +572,12 @@ async def submit_insurance_payment(
         # Create file records
         for file_data in uploaded_file_urls:
             await patient_file_crud.create_patient_file(
-                session,
                 file_batch_id=batch.id,
                 file_name=file_data["filename"],
                 file_url=file_data["file_url"],
                 file_type=file_data["content_type"],
                 file_size=file_data["size"],
+                session=session,
             )
 
         insurance_batch_id = batch.id
@@ -581,6 +585,31 @@ async def submit_insurance_payment(
         # Auto-share with doctor (this commits internally)
         await patient_file_crud.upsert_file_batch_share(
             file_batch_id=batch.id,
+            patient_user_id=current_user.id,
+            doctor_user_id=appointment.doctor_user_id,
+            appointment_id=appointment_id,
+            appointment_request_id=None,
+            session=session,
+        )
+    else:
+        # Reuse existing policy documents if linked
+        policy_files = getattr(policy, "policy_documents", None) or []
+        batch_id_from_policy = None
+        for link in policy_files:
+            if link.patient_file and getattr(link.patient_file, "file_batch_id", None):
+                batch_id_from_policy = link.patient_file.file_batch_id
+                break
+        if not batch_id_from_policy:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No documents found on this insurance policy. Please upload insurance documents.",
+            )
+
+        insurance_batch_id = batch_id_from_policy
+
+        # Ensure doctor has access via share
+        await patient_file_crud.upsert_file_batch_share(
+            file_batch_id=insurance_batch_id,
             patient_user_id=current_user.id,
             doctor_user_id=appointment.doctor_user_id,
             appointment_id=appointment_id,

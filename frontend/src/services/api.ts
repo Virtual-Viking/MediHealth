@@ -1861,6 +1861,24 @@ export interface PendingPaymentItem {
   payment_updated_at?: string | null;
 }
 
+export interface PatientTimelineItem {
+  type: string;
+  title: string;
+  detail?: string | null;
+  timestamp: string;
+  files?: { name: string; url: string }[];
+}
+
+export interface ConsultingPatient {
+  patient_id: number;
+  name: string;
+  photo_url?: string | null;
+  status_text: string;
+  visits: number;
+  upcoming: number;
+  timeline: PatientTimelineItem[];
+}
+
 export interface OnlinePaymentRequest {
   appointment_id: number;
   card_last_four: string;
@@ -2067,6 +2085,14 @@ export const doctorFinanceAPI = {
     });
   },
 
+  // Reject payment
+  rejectPayment: async (paymentId: number): Promise<Payment> => {
+    return apiFetch<Payment>(`/doctor-finance/payments/${paymentId}/reject`, {
+      method: "POST",
+      defaultError: "Failed to reject payment",
+    });
+  },
+
   // Get payment files
   getPaymentFiles: async (paymentId: number): Promise<{
     batch_id: number;
@@ -2084,6 +2110,14 @@ export const doctorFinanceAPI = {
     return apiFetch(`/doctor-finance/payments/${paymentId}/files`, {
       method: "GET",
       defaultError: "Failed to fetch payment files",
+    });
+  },
+
+  // List consulting patients
+  getConsultingPatients: async (): Promise<ConsultingPatient[]> => {
+    return apiFetch<ConsultingPatient[]>(`/doctors/patients/consulting`, {
+      method: "GET",
+      defaultError: "Failed to fetch patients",
     });
   },
 
