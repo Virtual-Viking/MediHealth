@@ -1,9 +1,10 @@
 apiVersion: 1
 datasources:
   - name: GCP Cloud Monitoring
+    uid: P3BE906CE9E430760
     type: stackdriver
     access: proxy
-    isDefault: false
+    isDefault: true
     editable: true
     jsonData:
       authenticationType: gce  # Uses GOOGLE_APPLICATION_CREDENTIALS

@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import os
 from pathlib import Path
+import sys
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -71,6 +72,12 @@ app = FastAPI(
 
 # Load environment from backend/.env regardless of current working directory
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
+
+# Ensure backend root on sys.path for absolute imports when run from subdirs
+backend_root_str = str(BACKEND_ROOT)
+if backend_root_str not in sys.path:
+    sys.path.insert(0, backend_root_str)
+
 ENV_PATH = BACKEND_ROOT / ".env"
 load_dotenv(dotenv_path=ENV_PATH, override=False)
 
@@ -415,6 +422,9 @@ async def grafana_summary(current_admin: AdminProfile = Depends(get_current_admi
     """
     service = get_grafana_service()
     data = service.get_summary()
+    data["fetched_at"] = datetime.now(timezone.utc).isoformat()
+    data["grafana_url"] = GRAFANA_URL
+    data["datasource_uid"] = GRAFANA_DS_UID
     return data
 
 
