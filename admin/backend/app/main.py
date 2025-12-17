@@ -23,6 +23,7 @@ import anyio
 import requests
 import time
 from app.services.grafana_service import get_grafana_service
+from app.services.gcp_monitoring_service import GCPMonitoringService
 
 # Import routers (to be implemented)
 # from app.routers import (
@@ -121,6 +122,8 @@ engine = create_engine(DATABASE_URL, connect_args=connect_args) if DATABASE_URL 
 GRAFANA_URL = os.getenv("GRAFANA_URL", "http://localhost:3100").rstrip("/")
 GRAFANA_API_KEY = os.getenv("GRAFANA_API_KEY", "")
 GRAFANA_DS_UID = os.getenv("GRAFANA_DS_UID", "")
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "").strip()
+GCP_LOCATION = os.getenv("GCP_LOCATION", "").strip() or None
 
 
 class LoginRequest(BaseModel):
@@ -426,6 +429,36 @@ async def grafana_summary(current_admin: AdminProfile = Depends(get_current_admi
     data["grafana_url"] = GRAFANA_URL
     data["datasource_uid"] = GRAFANA_DS_UID
     return data
+
+
+_gcp_monitoring_service: GCPMonitoringService | None = None
+
+
+def get_gcp_monitoring_service() -> GCPMonitoringService | None:
+    global _gcp_monitoring_service
+    if _gcp_monitoring_service is not None:
+        return _gcp_monitoring_service
+    if not GCP_PROJECT_ID:
+        return None
+    _gcp_monitoring_service = GCPMonitoringService(
+        project_id=GCP_PROJECT_ID,
+        location=GCP_LOCATION,
+    )
+    return _gcp_monitoring_service
+
+
+@app.get("/admin/monitoring/gcp/summary")
+async def gcp_monitoring_summary(current_admin: AdminProfile = Depends(get_current_admin)):
+    """
+    Fetch key metrics directly from Cloud Monitoring (no Grafana dependency).
+    """
+    service = get_gcp_monitoring_service()
+    if not service:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="GCP_PROJECT_ID is not configured",
+        )
+    return service.fetch_summary()
 
 
 @app.get("/admin/dashboard/performance", response_model=PerformanceMetrics)
