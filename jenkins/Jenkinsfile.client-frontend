@@ -64,14 +64,71 @@ pipeline {
                 script {
                     echo "Setting up Node.js ${NODE_VERSION}"
                     sh '''
-                        if command -v node &> /dev/null; then
-                            echo "Node.js already installed: $(node --version)"
+                        set -e
+                        
+                        NODE_INSTALL_DIR="${WORKSPACE}/.nodejs"
+                        NODE_VERSION="18.20.4"
+                        
+                        # Check if Node.js is already installed in our location
+                        if [ -f "${NODE_INSTALL_DIR}/bin/node" ] && [ "$(${NODE_INSTALL_DIR}/bin/node --version | cut -d. -f1)" = "v18" ]; then
+                            echo "Node.js 18.x already installed: $(${NODE_INSTALL_DIR}/bin/node --version)"
+                            echo "npm version: $(${NODE_INSTALL_DIR}/bin/npm --version)"
+                        # Check if node is in PATH and is version 18
+                        elif command -v node &> /dev/null && node --version | grep -q "v18"; then
+                            echo "Node.js 18.x found in PATH: $(node --version)"
                             echo "npm version: $(npm --version)"
+                            # Save the existing node path
+                            NODE_PATH=$(dirname $(which node))
+                            echo "${NODE_PATH}" > ${WORKSPACE}/.node_path || true
                         else
-                            echo "Installing Node.js..."
-                            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-                            sudo apt-get install -y nodejs
+                            echo "Installing Node.js ${NODE_VERSION}..."
+                            
+                            # Detect architecture
+                            ARCH=$(uname -m)
+                            case "$ARCH" in
+                                x86_64) ARCH="x64" ;;
+                                aarch64|arm64) ARCH="arm64" ;;
+                                *) ARCH="x64" ;;
+                            esac
+                            
+                            # Create installation directory (user-writable, no sudo needed)
+                            mkdir -p ${NODE_INSTALL_DIR}
+                            
+                            # Download and install Node.js
+                            if command -v curl &> /dev/null; then
+                                echo "Downloading Node.js ${NODE_VERSION} for ${ARCH}..."
+                                curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" -o /tmp/node.tar.xz
+                                
+                                echo "Extracting Node.js..."
+                                tar -xJf /tmp/node.tar.xz -C /tmp
+                                
+                                echo "Installing to ${NODE_INSTALL_DIR}..."
+                                cp -r /tmp/node-v${NODE_VERSION}-linux-${ARCH}/* ${NODE_INSTALL_DIR}/
+                                
+                                # Cleanup
+                                rm -rf /tmp/node-v${NODE_VERSION}-linux-${ARCH} /tmp/node.tar.xz
+                                
+                                # Verify installation
+                                if [ -f "${NODE_INSTALL_DIR}/bin/node" ]; then
+                                    echo "Node.js installed successfully: $(${NODE_INSTALL_DIR}/bin/node --version)"
+                                    echo "npm version: $(${NODE_INSTALL_DIR}/bin/npm --version)"
+                                else
+                                    echo "ERROR: Node.js installation verification failed"
+                                    exit 1
+                                fi
+                            else
+                                echo "ERROR: curl not available. Please install Node.js manually."
+                                exit 1
+                            fi
                         fi
+                        
+                        # Add to PATH for this session and save for future stages
+                        if [ -d "${NODE_INSTALL_DIR}/bin" ]; then
+                            export PATH="${NODE_INSTALL_DIR}/bin:$PATH"
+                            echo "${NODE_INSTALL_DIR}/bin" > ${WORKSPACE}/.node_path
+                        fi
+                        
+                        # Verify node is accessible
                         node --version
                         npm --version
                     '''
@@ -84,7 +141,17 @@ pipeline {
                 dir(FRONTEND_DIR) {
                     script {
                         echo "Installing npm dependencies..."
-                        sh 'npm ci'
+                        sh '''
+                            # Ensure Node.js is in PATH
+                            if [ -f ${WORKSPACE}/.node_path ]; then
+                                export PATH="$(cat ${WORKSPACE}/.node_path):$PATH"
+                            fi
+                            [ -d "${WORKSPACE}/.nodejs/bin" ] && export PATH="${WORKSPACE}/.nodejs/bin:$PATH"
+                            
+                            node --version
+                            npm --version
+                            npm ci
+                        '''
                     }
                 }
             }
@@ -95,7 +162,15 @@ pipeline {
                 dir(FRONTEND_DIR) {
                     script {
                         echo "Running ESLint..."
-                        sh 'npm run lint || true'
+                        sh '''
+                            # Ensure Node.js is in PATH
+                            if [ -f ${WORKSPACE}/.node_path ]; then
+                                export PATH="$(cat ${WORKSPACE}/.node_path):$PATH"
+                            fi
+                            [ -d "${WORKSPACE}/.nodejs/bin" ] && export PATH="${WORKSPACE}/.nodejs/bin:$PATH"
+                            
+                            npm run lint || true
+                        '''
                     }
                 }
             }
@@ -107,6 +182,12 @@ pipeline {
                     script {
                         echo "Building Next.js application..."
                         sh '''
+                            # Ensure Node.js is in PATH
+                            if [ -f ${WORKSPACE}/.node_path ]; then
+                                export PATH="$(cat ${WORKSPACE}/.node_path):$PATH"
+                            fi
+                            [ -d "${WORKSPACE}/.nodejs/bin" ] && export PATH="${WORKSPACE}/.nodejs/bin:$PATH"
+                            
                             export NODE_ENV=production
                             npm run build
                         '''
@@ -128,6 +209,12 @@ pipeline {
                     echo "Deploying frontend to localhost:${FRONTEND_PORT}..."
                     
                     sh """
+                        # Ensure Node.js is in PATH
+                        if [ -f ${WORKSPACE}/.node_path ]; then
+                            export PATH="\$(cat ${WORKSPACE}/.node_path):\$PATH"
+                        fi
+                        [ -d "${WORKSPACE}/.nodejs/bin" ] && export PATH="${WORKSPACE}/.nodejs/bin:\$PATH"
+                        
                         cd ${BUILD_DIR}
                         
                         # Install PM2 if not available

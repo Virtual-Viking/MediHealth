@@ -76,16 +76,113 @@ pipeline {
                 script {
                     echo "Checking Docker availability..."
                     sh '''
-                        if ! command -v docker &> /dev/null; then
-                            echo "Docker is not installed. Please install Docker first."
+                        set +e  # Don't exit on error initially
+                        
+                        # Check for Docker
+                        DOCKER_CMD=""
+                        if command -v docker &> /dev/null; then
+                            DOCKER_CMD="docker"
+                            echo "Found docker: $(docker --version)"
+                        # Check if docker is in /usr/bin
+                        elif [ -f /usr/bin/docker ]; then
+                            DOCKER_CMD="/usr/bin/docker"
+                            export PATH="/usr/bin:$PATH"
+                            echo "Found docker in /usr/bin: $($DOCKER_CMD --version)"
+                        # Check if docker is in /usr/local/bin
+                        elif [ -f /usr/local/bin/docker ]; then
+                            DOCKER_CMD="/usr/local/bin/docker"
+                            export PATH="/usr/local/bin:$PATH"
+                            echo "Found docker in /usr/local/bin: $($DOCKER_CMD --version)"
+                        fi
+                        
+                        # Check for Docker Compose
+                        DOCKER_COMPOSE_CMD=""
+                        if command -v docker-compose &> /dev/null; then
+                            DOCKER_COMPOSE_CMD="docker-compose"
+                            echo "Found docker-compose: $(docker-compose --version)"
+                        elif [ -n "$DOCKER_CMD" ] && $DOCKER_CMD compose version &> /dev/null; then
+                            DOCKER_COMPOSE_CMD="docker compose"
+                            echo "Found docker compose (plugin): $($DOCKER_CMD compose version)"
+                        fi
+                        
+                        # If Docker not found, try to install or provide instructions
+                        if [ -z "$DOCKER_CMD" ]; then
+                            echo ""
+                            echo "=========================================="
+                            echo "Docker is not installed"
+                            echo "=========================================="
+                            echo "Attempting to install Docker..."
+                            
+                            # Try to install Docker (may require sudo)
+                            if command -v curl &> /dev/null; then
+                                # Try installing Docker using official script
+                                if curl -fsSL https://get.docker.com -o /tmp/get-docker.sh 2>/dev/null; then
+                                    echo "Downloaded Docker installation script"
+                                    # Try running without sudo first
+                                    if sh /tmp/get-docker.sh 2>/dev/null; then
+                                        echo "Docker installed successfully"
+                                        DOCKER_CMD="docker"
+                                        export PATH="/usr/local/bin:$PATH"
+                                    else
+                                        echo "Docker installation requires sudo permissions"
+                                        echo ""
+                                        echo "Please install Docker manually:"
+                                        echo "  curl -fsSL https://get.docker.com -o get-docker.sh"
+                                        echo "  sudo sh get-docker.sh"
+                                        echo ""
+                                        echo "Or on Ubuntu/Debian:"
+                                        echo "  sudo apt-get update"
+                                        echo "  sudo apt-get install -y docker.io docker-compose"
+                                        exit 1
+                                    fi
+                                else
+                                    echo "Could not download Docker installation script"
+                                    echo ""
+                                    echo "Please install Docker manually:"
+                                    echo "  Visit: https://docs.docker.com/get-docker/"
+                                    exit 1
+                                fi
+                            else
+                                echo "curl not available. Cannot install Docker automatically."
+                                echo ""
+                                echo "Please install Docker manually:"
+                                echo "  Visit: https://docs.docker.com/get-docker/"
+                                exit 1
+                            fi
+                        fi
+                        
+                        # Verify Docker is working
+                        set -e
+                        if [ -z "$DOCKER_CMD" ]; then
+                            echo "ERROR: Docker command not found after installation attempt"
                             exit 1
                         fi
-                        if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-                            echo "Docker Compose is not installed. Please install Docker Compose first."
-                            exit 1
+                        
+                        # Test Docker
+                        $DOCKER_CMD --version
+                        
+                        # Check Docker Compose
+                        if [ -z "$DOCKER_COMPOSE_CMD" ]; then
+                            echo "WARNING: Docker Compose not found, but docker compose plugin may work"
+                            # Try docker compose
+                            if $DOCKER_CMD compose version &> /dev/null; then
+                                echo "Docker Compose plugin is available"
+                            else
+                                echo "Docker Compose is not available. Some features may not work."
+                                echo "To install: sudo apt-get install -y docker-compose"
+                            fi
+                        else
+                            if [ "$DOCKER_COMPOSE_CMD" = "docker-compose" ]; then
+                                docker-compose --version
+                            else
+                                $DOCKER_CMD compose version
+                            fi
                         fi
-                        docker --version
-                        docker-compose --version || docker compose version
+                        
+                        # Save Docker path for later stages
+                        DOCKER_PATH=$(dirname $(which $DOCKER_CMD))
+                        echo "${DOCKER_PATH}" > ${WORKSPACE}/.docker_path
+                        echo "$DOCKER_CMD" > ${WORKSPACE}/.docker_cmd
                     '''
                 }
             }
@@ -96,18 +193,28 @@ pipeline {
                 script {
                     echo "Deploying Prometheus on port ${PROMETHEUS_PORT}..."
                     sh """
+                        # Load Docker path
+                        if [ -f ${WORKSPACE}/.docker_path ]; then
+                            export PATH="\$(cat ${WORKSPACE}/.docker_path):\$PATH"
+                        fi
+                        if [ -f ${WORKSPACE}/.docker_cmd ]; then
+                            DOCKER_CMD=\$(cat ${WORKSPACE}/.docker_cmd)
+                        else
+                            DOCKER_CMD="docker"
+                        fi
+                        
                         # Stop existing Prometheus container
-                        docker stop ${PROMETHEUS_CONTAINER} 2>/dev/null || true
-                        docker rm ${PROMETHEUS_CONTAINER} 2>/dev/null || true
+                        \$DOCKER_CMD stop ${PROMETHEUS_CONTAINER} 2>/dev/null || true
+                        \$DOCKER_CMD rm ${PROMETHEUS_CONTAINER} 2>/dev/null || true
                         
                         # Stop using docker-compose if exists
                         if [ -f "${DOCKER_COMPOSE_PROMETHEUS}" ]; then
                             cd ${WORKSPACE}/admin
-                            docker-compose -f docker-compose.prometheus.yml down 2>/dev/null || docker compose -f docker-compose.prometheus.yml down 2>/dev/null || true
+                            docker-compose -f docker-compose.prometheus.yml down 2>/dev/null || \$DOCKER_CMD compose -f docker-compose.prometheus.yml down 2>/dev/null || true
                         fi
                         
                         # Start Prometheus on custom port
-                        docker run -d \\
+                        \$DOCKER_CMD run -d \\
                             --name ${PROMETHEUS_CONTAINER} \\
                             -p ${PROMETHEUS_PORT}:9090 \\
                             -v ${WORKSPACE}/admin/prometheus.yml:/etc/prometheus/prometheus.yml:ro \\
@@ -128,13 +235,23 @@ pipeline {
                 script {
                     echo "Deploying Grafana on port ${GRAFANA_PORT}..."
                     sh """
+                        # Load Docker path
+                        if [ -f ${WORKSPACE}/.docker_path ]; then
+                            export PATH="\$(cat ${WORKSPACE}/.docker_path):\$PATH"
+                        fi
+                        if [ -f ${WORKSPACE}/.docker_cmd ]; then
+                            DOCKER_CMD=\$(cat ${WORKSPACE}/.docker_cmd)
+                        else
+                            DOCKER_CMD="docker"
+                        fi
+                        
                         # Stop existing Grafana container
-                        docker stop ${GRAFANA_CONTAINER} 2>/dev/null || true
-                        docker rm ${GRAFANA_CONTAINER} 2>/dev/null || true
+                        \$DOCKER_CMD stop ${GRAFANA_CONTAINER} 2>/dev/null || true
+                        \$DOCKER_CMD rm ${GRAFANA_CONTAINER} 2>/dev/null || true
                         
                         # Stop using docker-compose if exists
                         if [ -f "${DOCKER_COMPOSE_GRAFANA}" ]; then
-                            docker-compose -f ${DOCKER_COMPOSE_GRAFANA} down 2>/dev/null || docker compose -f ${DOCKER_COMPOSE_GRAFANA} down 2>/dev/null || true
+                            docker-compose -f ${DOCKER_COMPOSE_GRAFANA} down 2>/dev/null || \$DOCKER_CMD compose -f ${DOCKER_COMPOSE_GRAFANA} down 2>/dev/null || true
                         fi
                         
                         # Create necessary directories
@@ -142,7 +259,7 @@ pipeline {
                         mkdir -p ${WORKSPACE}/grafana/provisioning/dashboards
                         
                         # Start Grafana on custom port
-                        docker run -d \\
+                        \$DOCKER_CMD run -d \\
                             --name ${GRAFANA_CONTAINER} \\
                             -p ${GRAFANA_PORT}:3000 \\
                             -e GF_SECURITY_ADMIN_USER=admin \\
@@ -171,13 +288,71 @@ pipeline {
                 script {
                     echo "Setting up Node.js ${NODE_VERSION}"
                     sh '''
-                        if command -v node &> /dev/null; then
-                            echo "Node.js already installed: $(node --version)"
+                        set -e
+                        
+                        NODE_INSTALL_DIR="${WORKSPACE}/.nodejs"
+                        NODE_VERSION="18.20.4"
+                        
+                        # Check if Node.js is already installed in our location
+                        if [ -f "${NODE_INSTALL_DIR}/bin/node" ] && [ "$(${NODE_INSTALL_DIR}/bin/node --version | cut -d. -f1)" = "v18" ]; then
+                            echo "Node.js 18.x already installed: $(${NODE_INSTALL_DIR}/bin/node --version)"
+                            echo "npm version: $(${NODE_INSTALL_DIR}/bin/npm --version)"
+                        # Check if node is in PATH and is version 18
+                        elif command -v node &> /dev/null && node --version | grep -q "v18"; then
+                            echo "Node.js 18.x found in PATH: $(node --version)"
+                            echo "npm version: $(npm --version)"
+                            # Save the existing node path
+                            NODE_PATH=$(dirname $(which node))
+                            echo "${NODE_PATH}" > ${WORKSPACE}/.node_path
                         else
-                            echo "Installing Node.js..."
-                            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-                            sudo apt-get install -y nodejs
+                            echo "Installing Node.js ${NODE_VERSION}..."
+                            
+                            # Detect architecture
+                            ARCH=$(uname -m)
+                            case "$ARCH" in
+                                x86_64) ARCH="x64" ;;
+                                aarch64|arm64) ARCH="arm64" ;;
+                                *) ARCH="x64" ;;
+                            esac
+                            
+                            # Create installation directory (user-writable, no sudo needed)
+                            mkdir -p ${NODE_INSTALL_DIR}
+                            
+                            # Download and install Node.js
+                            if command -v curl &> /dev/null; then
+                                echo "Downloading Node.js ${NODE_VERSION} for ${ARCH}..."
+                                curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" -o /tmp/node.tar.xz
+                                
+                                echo "Extracting Node.js..."
+                                tar -xJf /tmp/node.tar.xz -C /tmp
+                                
+                                echo "Installing to ${NODE_INSTALL_DIR}..."
+                                cp -r /tmp/node-v${NODE_VERSION}-linux-${ARCH}/* ${NODE_INSTALL_DIR}/
+                                
+                                # Cleanup
+                                rm -rf /tmp/node-v${NODE_VERSION}-linux-${ARCH} /tmp/node.tar.xz
+                                
+                                # Verify installation
+                                if [ -f "${NODE_INSTALL_DIR}/bin/node" ]; then
+                                    echo "Node.js installed successfully: $(${NODE_INSTALL_DIR}/bin/node --version)"
+                                    echo "npm version: $(${NODE_INSTALL_DIR}/bin/npm --version)"
+                                else
+                                    echo "ERROR: Node.js installation verification failed"
+                                    exit 1
+                                fi
+                            else
+                                echo "ERROR: curl not available. Please install Node.js manually."
+                                exit 1
+                            fi
                         fi
+                        
+                        # Add to PATH for this session and save for future stages
+                        if [ -d "${NODE_INSTALL_DIR}/bin" ]; then
+                            export PATH="${NODE_INSTALL_DIR}/bin:$PATH"
+                            echo "${NODE_INSTALL_DIR}/bin" > ${WORKSPACE}/.node_path
+                        fi
+                        
+                        # Verify node is accessible
                         node --version
                         npm --version
                     '''
@@ -190,9 +365,25 @@ pipeline {
                 dir(ADMIN_FRONTEND_DIR) {
                     script {
                         echo "Installing admin frontend dependencies..."
-                        sh 'npm ci'
+                        sh '''
+                            # Ensure Node.js is in PATH
+                            if [ -f ${WORKSPACE}/.node_path ]; then
+                                export PATH="$(cat ${WORKSPACE}/.node_path):$PATH"
+                            fi
+                            [ -d "${WORKSPACE}/.nodejs/bin" ] && export PATH="${WORKSPACE}/.nodejs/bin:$PATH"
+                            
+                            npm ci
+                        '''
                         echo "Building admin frontend..."
-                        sh 'npm run build'
+                        sh '''
+                            # Ensure Node.js is in PATH
+                            if [ -f ${WORKSPACE}/.node_path ]; then
+                                export PATH="$(cat ${WORKSPACE}/.node_path):$PATH"
+                            fi
+                            [ -d "${WORKSPACE}/.nodejs/bin" ] && export PATH="${WORKSPACE}/.nodejs/bin:$PATH"
+                            
+                            npm run build
+                        '''
                     }
                 }
             }
@@ -203,15 +394,95 @@ pipeline {
                 script {
                     echo "Setting up Python ${PYTHON_VERSION}"
                     sh '''
-                        if command -v python3 &> /dev/null; then
-                            echo "Python already installed: $(python3 --version)"
-                        else
-                            echo "Installing Python..."
-                            sudo apt-get update
-                            sudo apt-get install -y python3 python3-pip python3-venv
+                        set +e  # Don't exit on error initially
+                        
+                        # Check various Python commands
+                        PYTHON_CMD=""
+                        PYTHON_VERSION_CHECK=""
+                        
+                        # Try python3.11 first
+                        if command -v python3.11 &> /dev/null; then
+                            PYTHON_CMD="python3.11"
+                            PYTHON_VERSION_CHECK=$(python3.11 --version 2>&1)
+                            echo "Found python3.11: $PYTHON_VERSION_CHECK"
+                        # Try python3
+                        elif command -v python3 &> /dev/null; then
+                            PYTHON_CMD="python3"
+                            PYTHON_VERSION_CHECK=$(python3 --version 2>&1)
+                            PYTHON_VER=$(echo "$PYTHON_VERSION_CHECK" | awk '{print $2}' | cut -d. -f1,2)
+                            PYTHON_MAJOR=$(echo $PYTHON_VER | cut -d. -f1)
+                            PYTHON_MINOR=$(echo $PYTHON_VER | cut -d. -f2)
+                            
+                            if [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -ge 11 ]; then
+                                echo "Found python3 (3.11+): $PYTHON_VERSION_CHECK"
+                            else
+                                echo "Found python3 but version is $PYTHON_VER (need 3.11+)"
+                                PYTHON_CMD=""
+                            fi
+                        # Try python
+                        elif command -v python &> /dev/null; then
+                            PYTHON_VERSION_CHECK=$(python --version 2>&1)
+                            if echo "$PYTHON_VERSION_CHECK" | grep -q "Python 3"; then
+                                PYTHON_VER=$(echo "$PYTHON_VERSION_CHECK" | awk '{print $2}' | cut -d. -f1,2)
+                                PYTHON_MAJOR=$(echo $PYTHON_VER | cut -d. -f1)
+                                PYTHON_MINOR=$(echo $PYTHON_VER | cut -d. -f2)
+                                
+                                if [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -ge 11 ]; then
+                                    PYTHON_CMD="python"
+                                    echo "Found python (3.11+): $PYTHON_VERSION_CHECK"
+                                fi
+                            fi
                         fi
-                        python3 --version
-                        pip3 --version
+                        
+                        # If Python 3.11+ found, use it
+                        if [ -n "$PYTHON_CMD" ]; then
+                            echo "Using $PYTHON_CMD: $PYTHON_VERSION_CHECK"
+                            
+                            # Save Python path for subsequent stages
+                            PYTHON_PATH=$(dirname $(which $PYTHON_CMD))
+                            echo "${PYTHON_PATH}" > ${WORKSPACE}/.python_path
+                            echo "$PYTHON_CMD" > ${WORKSPACE}/.python_cmd
+                            
+                            # Verify pip
+                            $PYTHON_CMD -m pip --version 2>/dev/null || pip3 --version 2>/dev/null || echo "pip will be installed in virtual environment"
+                            
+                            set -e  # Re-enable exit on error
+                            exit 0
+                        fi
+                        
+                        # Python 3.11+ not found, try to install
+                        set -e
+                        echo "Python 3.11+ not found. Attempting installation..."
+                        
+                        # Try installing using deadsnakes PPA (Ubuntu/Debian)
+                        if command -v apt-get &> /dev/null; then
+                            echo "Detected Debian/Ubuntu system. Attempting to install Python 3.11..."
+                            
+                            # Try without sudo first (in case we have permissions)
+                            if apt-get update 2>/dev/null && apt-get install -y python3.11 python3.11-venv python3.11-pip 2>/dev/null; then
+                                PYTHON_CMD="python3.11"
+                                PYTHON_PATH=$(dirname $(which python3.11))
+                                echo "${PYTHON_PATH}" > ${WORKSPACE}/.python_path
+                                echo "$PYTHON_CMD" > ${WORKSPACE}/.python_cmd
+                                echo "Python 3.11 installed successfully: $(python3.11 --version)"
+                                exit 0
+                            fi
+                        fi
+                        
+                        # Installation failed - provide clear error
+                        echo ""
+                        echo "=========================================="
+                        echo "ERROR: Python 3.11+ is required but not found"
+                        echo "=========================================="
+                        echo "Please install Python 3.11+ on the Jenkins agent:"
+                        echo ""
+                        echo "For Ubuntu/Debian:"
+                        echo "  sudo apt-get update"
+                        echo "  sudo apt-get install -y python3.11 python3.11-venv python3.11-pip"
+                        echo ""
+                        echo "Or configure the Jenkins NodeJS/Python plugin to use Python 3.11"
+                        echo "=========================================="
+                        exit 1
                     '''
                 }
             }
@@ -223,8 +494,18 @@ pipeline {
                     script {
                         echo "Creating virtual environment..."
                         sh '''
+                            # Load Python path and command
+                            if [ -f ${WORKSPACE}/.python_path ]; then
+                                export PATH="$(cat ${WORKSPACE}/.python_path):$PATH"
+                            fi
+                            if [ -f ${WORKSPACE}/.python_cmd ]; then
+                                PYTHON_CMD=$(cat ${WORKSPACE}/.python_cmd)
+                            else
+                                PYTHON_CMD="python3"
+                            fi
+                            
                             if [ ! -d "venv" ]; then
-                                python3 -m venv venv
+                                $PYTHON_CMD -m venv venv
                             fi
                             . venv/bin/activate
                             pip install --upgrade pip
@@ -249,6 +530,12 @@ pipeline {
                     
                     // Deploy Admin Frontend
                     sh """
+                        # Ensure Node.js is in PATH
+                        if [ -f ${WORKSPACE}/.node_path ]; then
+                            export PATH="\$(cat ${WORKSPACE}/.node_path):\$PATH"
+                        fi
+                        [ -d "${WORKSPACE}/.nodejs/bin" ] && export PATH="${WORKSPACE}/.nodejs/bin:\$PATH"
+                        
                         cd ${WORKSPACE}/${ADMIN_FRONTEND_DIR}
                         
                         # Install PM2 if not available
@@ -272,6 +559,11 @@ pipeline {
                     
                     // Deploy Admin Backend
                     sh """
+                        # Load Python path
+                        if [ -f ${WORKSPACE}/.python_path ]; then
+                            export PATH="\$(cat ${WORKSPACE}/.python_path):\$PATH"
+                        fi
+                        
                         cd ${WORKSPACE}/${ADMIN_BACKEND_DIR}
                         . venv/bin/activate
                         
