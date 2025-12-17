@@ -1879,6 +1879,24 @@ export interface ConsultingPatient {
   timeline: PatientTimelineItem[];
 }
 
+export interface VisitingDoctorTimelineItem {
+  type: string;
+  title: string;
+  detail?: string | null;
+  timestamp: string;
+}
+
+export interface VisitingDoctor {
+  doctor_id: number;
+  name: string;
+  photo_url?: string | null;
+  specialty?: string | null;
+  status_text: string;
+  visits: number;
+  upcoming: number;
+  timeline: VisitingDoctorTimelineItem[];
+}
+
 export interface OnlinePaymentRequest {
   appointment_id: number;
   card_last_four: string;
@@ -2118,6 +2136,14 @@ export const doctorFinanceAPI = {
     return apiFetch<ConsultingPatient[]>(`/doctors/patients/consulting`, {
       method: "GET",
       defaultError: "Failed to fetch patients",
+    });
+  },
+
+  // List visiting doctors for patient
+  getVisitingDoctors: async (): Promise<VisitingDoctor[]> => {
+    return apiFetch<VisitingDoctor[]>(`/patients/visiting-doctors`, {
+      method: "GET",
+      defaultError: "Failed to fetch doctors",
     });
   },
 

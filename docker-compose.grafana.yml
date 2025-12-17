@@ -5,7 +5,7 @@ services:
     image: grafana/grafana:latest
     container_name: medilink-grafana
     ports:
-      - "3001:3000"  # Use 3001 to avoid conflict with Next.js on 3000
+      - "3100:3000"  # Use 3100 to avoid conflict with app frontends
     environment:
       # Security
       - GF_SECURITY_ADMIN_USER=admin
@@ -13,7 +13,7 @@ services:
       - GF_SECURITY_SECRET_KEY=${GRAFANA_SECRET_KEY:-changeme-in-production}
       
       # Server
-      - GF_SERVER_ROOT_URL=http://localhost:3001
+      - GF_SERVER_ROOT_URL=http://localhost:3100
       - GF_SERVER_DOMAIN=localhost
       
       # Database (SQLite for simplicity, use PostgreSQL for production)

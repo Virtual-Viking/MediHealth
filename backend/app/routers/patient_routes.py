@@ -1,6 +1,6 @@
 import os
 import uuid
-from typing import Any
+from typing import Any, List, Dict, Optional
 
 from fastapi import (
     APIRouter,
@@ -15,6 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_session
 from db.crud import auth_crud, patient_crud, account_status_crud
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+from db.models.appointment_model import Appointment
+from db.models.finance_model import Payment
+from db.models.user_model import User
+from pydantic import BaseModel
 from schemas import (
     PatientProfileEnvelope,
     PatientProfileUpdate,
@@ -28,6 +34,24 @@ from schemas import (
 from services import get_storage_service, verify_access_token
 
 router = APIRouter()
+
+
+class VisitingDoctorTimelineItem(BaseModel):
+    type: str
+    title: str
+    detail: Optional[str] = None
+    timestamp: str
+
+
+class VisitingDoctor(BaseModel):
+    doctor_id: int
+    name: str
+    photo_url: Optional[str] = None
+    specialty: Optional[str] = None
+    status_text: str
+    visits: int
+    upcoming: int
+    timeline: List[VisitingDoctorTimelineItem]
 
 
 async def get_current_patient(
@@ -336,6 +360,142 @@ async def reactivate_patient_account(
         )
     
     return result
+
+
+@router.get("/visiting-doctors", response_model=List[VisitingDoctor])
+async def list_visiting_doctors(
+    current_user=Depends(get_current_patient),
+    session: AsyncSession = Depends(get_session),
+):
+    """List doctors the patient has interacted with, including visit counts and timeline."""
+    appt_result = await session.execute(
+        select(Appointment)
+        .where(Appointment.patient_user_id == current_user.id)
+    )
+    appointments = appt_result.scalars().all()
+
+    if not appointments:
+        return []
+
+    doctor_ids = {appt.doctor_user_id for appt in appointments if appt.doctor_user_id}
+    if not doctor_ids:
+        return []
+
+    users_result = await session.execute(
+        select(User)
+        .where(User.id.in_(doctor_ids))
+        .options(selectinload(User.doctor_profile))
+    )
+    users_map = {u.id: u for u in users_result.scalars().all()}
+
+    payments_result = await session.execute(
+        select(Payment).where(
+            Payment.patient_user_id == current_user.id,
+            Payment.doctor_user_id.in_(doctor_ids),
+        )
+    )
+    payments = payments_result.scalars().all()
+    payments_by_appt = {p.appointment_id: p for p in payments}
+
+    appts_by_doctor: Dict[int, List[Appointment]] = {}
+    for appt in appointments:
+        appts_by_doctor.setdefault(appt.doctor_user_id, []).append(appt)
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    visiting: List[VisitingDoctor] = []
+
+    for doctor_id, appts in appts_by_doctor.items():
+        user = users_map.get(doctor_id)
+        if not user:
+            continue
+
+        visits = sum(
+            1
+            for a in appts
+            if a.status == "confirmed" and a.appointment_date and a.appointment_date < now
+        )
+        upcoming = sum(
+            1
+            for a in appts
+            if a.appointment_date and a.appointment_date >= now
+        )
+
+        payment_pending = any(
+            payments_by_appt.get(a.appointment_id)
+            and payments_by_appt.get(a.appointment_id).payment_status == "pending"
+            for a in appts
+        )
+
+        if visits > 0 or upcoming > 0:
+            status_text = f"{visits} visit{'s' if visits != 1 else ''}, {upcoming} upcoming"
+        elif payment_pending:
+            status_text = "payment pending"
+        else:
+            status_text = "No recent visits"
+
+        events: List[VisitingDoctorTimelineItem] = []
+        for appt in appts:
+            ts_created = getattr(appt, "created_at", None) or appt.appointment_date
+            if ts_created:
+                events.append(
+                    VisitingDoctorTimelineItem(
+                        type="appointment",
+                        title="Appointment booked",
+                        detail=f"Status: {appt.status}",
+                        timestamp=ts_created.isoformat(),
+                    )
+                )
+            if appt.status == "confirmed":
+                ts_conf = getattr(appt, "updated_at", None) or appt.appointment_date
+                if ts_conf:
+                    events.append(
+                        VisitingDoctorTimelineItem(
+                            type="appointment",
+                            title="Appointment confirmed",
+                            detail=None,
+                            timestamp=ts_conf.isoformat(),
+                        )
+                    )
+            payment = payments_by_appt.get(appt.appointment_id)
+            if payment:
+                ts_pay = getattr(payment, "updated_at", None) or getattr(payment, "created_at", None)
+                if ts_pay:
+                    events.append(
+                        VisitingDoctorTimelineItem(
+                            type="payment",
+                            title=f"Payment {payment.payment_status}",
+                            detail=f"Method: {payment.payment_method or 'N/A'}",
+                            timestamp=ts_pay.isoformat(),
+                        )
+                    )
+
+        events.sort(key=lambda e: e.timestamp, reverse=True)
+
+        name = " ".join(
+            [p for p in [user.first_name, user.last_name] if p]
+        ).strip()
+        photo_url = None
+        specialty = None
+        if user.doctor_profile:
+            photo_url = user.doctor_profile.photo_url
+            specialty = getattr(user.doctor_profile, "specialty", None)
+
+        visiting.append(
+            VisitingDoctor(
+                doctor_id=doctor_id,
+                name=name or "Doctor",
+                photo_url=photo_url,
+                specialty=specialty,
+                status_text=status_text,
+                visits=visits,
+                upcoming=upcoming,
+                timeline=events,
+            )
+        )
+
+    return visiting
 
 
 @router.get("/account-status", response_model=AccountStatusInfo)

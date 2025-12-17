@@ -1,8 +1,8 @@
 "use client";
 
-import { KeyboardEvent, useCallback, useEffect, useState } from "react";
+import { KeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import { doctorAPI, DoctorListItem, APIError } from "@/services/api";
+import { doctorAPI, DoctorListItem, APIError, VisitingDoctor, VisitingDoctorTimelineItem, doctorFinanceAPI } from "@/services/api";
 import { formatSpecialty } from "@/utils/formatSpecialty";
 import DoctorMapWidget from "@/components/DoctorMapWidget";
 import RequestAppointmentModal from "@/components/patient/RequestAppointmentModal";
@@ -25,6 +25,10 @@ export default function DoctorsPage() {
   const [selectedDoctor, setSelectedDoctor] = useState<DoctorListItem | null>(null);
   const [requestModalOpen, setRequestModalOpen] = useState(false);
   const [selectedDoctorForRequest, setSelectedDoctorForRequest] = useState<DoctorListItem | null>(null);
+  const [visitingDoctors, setVisitingDoctors] = useState<VisitingDoctor[]>([]);
+  const [visitingLoading, setVisitingLoading] = useState(false);
+  const [visitingError, setVisitingError] = useState<string | null>(null);
+  const [expandedVisitingId, setExpandedVisitingId] = useState<number | null>(null);
 
   const mergeSpecialties = useCallback((incoming: Array<string | null | undefined | { value?: string; label?: string }>) => {
     setSpecialtyOptions((prev) => {
@@ -126,6 +130,7 @@ export default function DoctorsPage() {
     };
 
     fetchSpecialties();
+    fetchVisitingDoctors();
 
     return () => {
       isMounted = false;
@@ -174,6 +179,19 @@ export default function DoctorsPage() {
     console.log("Appointment request submitted successfully");
   };
 
+  const fetchVisitingDoctors = async () => {
+    try {
+      setVisitingLoading(true);
+      setVisitingError(null);
+      const data = await doctorFinanceAPI.getVisitingDoctors();
+      setVisitingDoctors(data);
+    } catch (err: any) {
+      setVisitingError(err.detail || "Failed to load your doctors.");
+    } finally {
+      setVisitingLoading(false);
+    }
+  };
+
   const handleSendMessage = (doctorId: number) => {
     // TODO: Navigate to chats with doctor pre-selected
     console.log("Send message to doctor:", doctorId);
@@ -184,7 +202,56 @@ export default function DoctorsPage() {
     console.log("View profile for doctor:", doctorId);
   };
 
+  const formatDate = (dateString: string): string => {
+    const date = new Date(dateString);
+    const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const dayName = days[date.getDay()];
+    const month = months[date.getMonth()];
+    const day = date.getDate();
+    const year = date.getFullYear();
+    return `${dayName} ${month} ${day} ${year}`;
+  };
+
+  const formatTime = (dateString: string): string => {
+    const date = new Date(dateString);
+    const hours = date.getHours();
+    const minutes = date.getMinutes();
+    const ampm = hours >= 12 ? "PM" : "AM";
+    const displayHours = hours % 12 || 12;
+    const displayMinutes = minutes.toString().padStart(2, "0");
+    return `${displayHours}:${displayMinutes} ${ampm}`;
+  };
+
+  const getDateLabel = (itemDate: string, index: number, all: VisitingDoctorTimelineItem[]): string | null => {
+    if (index === 0) return "Today";
+    const current = new Date(itemDate);
+    const prev = new Date(all[index - 1].timestamp);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const c = new Date(current);
+    c.setHours(0, 0, 0, 0);
+    const p = new Date(prev);
+    p.setHours(0, 0, 0, 0);
+    const diffDays = Math.floor((today.getTime() - c.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays === 0) return null;
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays < 7) return `${diffDays} days ago`;
+    if (c.getTime() !== p.getTime()) {
+      return formatDate(itemDate);
+    }
+    return null;
+  };
+
+  const getTypeBadge = (type: string) => {
+    const base = "px-3 py-1 text-xs font-medium rounded-full";
+    if (type === "payment") return <span className={`${base} bg-green-100 text-green-800`}>Payment</span>;
+    if (type === "files") return <span className={`${base} bg-purple-100 text-purple-800`}>Files</span>;
+    return <span className={`${base} bg-blue-100 text-blue-800`}>Appointment</span>;
+  };
+
   const placeholderPhoto = "/Avatar.jpg";
+  const visitingFiltered = useMemo(() => visitingDoctors, [visitingDoctors]);
 
   return (
     <main
@@ -192,6 +259,116 @@ export default function DoctorsPage() {
       style={{ backgroundColor: "#ECF4F9" }}
     >
       <div className="space-y-6">
+        <div className="rounded-lg bg-white p-6 shadow">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900">Your Doctors</h2>
+              <p className="text-sm text-gray-500">Doctors you’ve consulted or have upcoming visits with.</p>
+            </div>
+            <button
+              onClick={fetchVisitingDoctors}
+              className="rounded-lg border border-blue-200 px-4 py-2 text-sm font-medium text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-50"
+              disabled={visitingLoading}
+            >
+              Refresh
+            </button>
+          </div>
+
+          {visitingLoading ? (
+            <div className="text-center text-gray-500 py-6">Loading...</div>
+          ) : visitingError ? (
+            <div className="text-center text-red-600 py-6">{visitingError}</div>
+          ) : visitingFiltered.length === 0 ? (
+            <div className="text-center text-gray-500 py-6">No doctors to show yet.</div>
+          ) : (
+            <div className="space-y-3">
+              {visitingFiltered.map((d) => {
+                const isOpen = expandedVisitingId === d.doctor_id;
+                return (
+                  <div key={d.doctor_id} className="bg-white rounded-lg border border-gray-200 shadow-sm">
+                    <button
+                      onClick={() => setExpandedVisitingId(isOpen ? null : d.doctor_id)}
+                      className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="h-12 w-12 rounded-full overflow-hidden bg-gray-100 flex items-center justify-center">
+                          {d.photo_url ? (
+                            <Image src={d.photo_url} alt={d.name} width={48} height={48} className="h-12 w-12 object-cover" />
+                          ) : (
+                            <span className="text-gray-500 text-sm font-semibold">
+                              {d.name?.[0]?.toUpperCase() || "D"}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-left">
+                          <p className="text-base font-semibold text-gray-900">{d.name}</p>
+                          <p className="text-sm text-gray-600">
+                            {d.specialty ? formatSpecialty(d.specialty) : "Doctor"} · {d.status_text}
+                          </p>
+                        </div>
+                      </div>
+                      <span className="text-gray-400">{isOpen ? "▲" : "▼"}</span>
+                    </button>
+
+                    {isOpen && (
+                      <div className="px-4 pb-4">
+                        {d.timeline.length === 0 ? (
+                          <div className="text-sm text-gray-600">No timeline data yet.</div>
+                        ) : (
+                          <div className="border-t border-gray-200 pt-4 space-y-6">
+                            {d.timeline.map((item: VisitingDoctorTimelineItem, idx: number) => {
+                              const dateLabel = getDateLabel(item.timestamp, idx, d.timeline);
+                              return (
+                                <div key={`${item.timestamp}-${idx}`} className="relative">
+                                  {dateLabel && (
+                                    <div className="flex justify-center mb-4">
+                                      <span className="bg-blue-100 text-blue-800 px-4 py-1 rounded-full text-xs font-medium">
+                                        {dateLabel}
+                                      </span>
+                                    </div>
+                                  )}
+                                  <div className="flex gap-6">
+                                    <div className="w-32 text-right flex-shrink-0">
+                                      <div className="text-blue-600 font-medium text-xs">{formatDate(item.timestamp)}</div>
+                                      <div className="text-blue-600 font-medium text-xs">{formatTime(item.timestamp)}</div>
+                                    </div>
+                                    <div className="relative flex flex-col items-center">
+                                      <div className="w-3 h-3 rounded-full bg-blue-500 ring-4 ring-blue-100 z-10"></div>
+                                      {idx < d.timeline.length - 1 && (
+                                        <div className="w-0.5 h-full bg-blue-200 absolute top-3"></div>
+                                      )}
+                                    </div>
+                                    <div className="flex-1 pb-2">
+                                      <div className="bg-gray-50 rounded-lg p-4 hover:shadow-md transition-shadow">
+                                        <div className="flex items-start justify-between mb-2">
+                                          <div className="flex items-center gap-2">
+                                            {getTypeBadge(item.type)}
+                                            <p className="text-sm font-semibold text-gray-900">{item.title}</p>
+                                          </div>
+                                        </div>
+                                        {item.detail && (
+                                          <p className="text-xs text-gray-600 mb-2">{item.detail}</p>
+                                        )}
+                                        <p className="text-xs text-gray-500">
+                                          {formatDate(item.timestamp)} · {formatTime(item.timestamp)}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         <div className="rounded-lg bg-white p-6 shadow">
           <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>

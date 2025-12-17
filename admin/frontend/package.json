@@ -4,7 +4,7 @@
   "description": "Admin panel for MediLink healthcare platform",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3001",
+    "dev": "NEXT_DISABLE_TURBOPACK=1 next dev -p 3001",
     "build": "next build",
     "start": "next start -p 3001",
     "lint": "next lint",
