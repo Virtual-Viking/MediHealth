@@ -7,9 +7,8 @@ pipeline {
         BUILD_DIR = '${WORKSPACE}/${FRONTEND_DIR}'
         BACKUP_DIR = '${WORKSPACE}/backups'
         FRONTEND_PORT = '5001'
-        SLACK_WEBHOOK_URL = credentials('slack-webhook-url')
         SLACK_CHANNEL = '#team2'
-        DEPLOYMENT_URL = "http://localhost:${FRONTEND_PORT}"
+        DEPLOYMENT_URL = "http://localhost:5001"
     }
     
     options {
@@ -210,21 +209,33 @@ pipeline {
         success {
             script {
                 echo "Pipeline succeeded!"
-                sendSlackNotification('success')
+                try {
+                    sendSlackNotification('success')
+                } catch (Exception e) {
+                    echo "Failed to send Slack notification: ${e.getMessage()}"
+                }
             }
         }
         failure {
             script {
                 echo "Pipeline failed!"
-                sendSlackNotification('failure')
+                try {
+                    sendSlackNotification('failure')
+                } catch (Exception e) {
+                    echo "Failed to send Slack notification: ${e.getMessage()}"
+                }
             }
         }
         cleanup {
             script {
-                sh """
-                    cd ${BACKUP_DIR}
-                    ls -t | tail -n +11 | xargs rm -f || true
-                """
+                try {
+                    sh """
+                        cd ${env.BACKUP_DIR}
+                        ls -t | tail -n +11 | xargs rm -f || true
+                    """
+                } catch (Exception e) {
+                    echo "Cleanup failed: ${e.getMessage()}"
+                }
                 cleanWs()
             }
         }
@@ -233,21 +244,23 @@ pipeline {
 
 // Helper function to send Slack notifications
 def sendSlackNotification(String status) {
-    def webhookUrl = SLACK_WEBHOOK_URL?.toString()?.trim()
-    if (!webhookUrl || webhookUrl.isEmpty()) {
-        echo "Slack webhook URL not configured, skipping notification"
-        return
-    }
-    
-    def color = status == 'success' ? 'good' : 'danger'
-    def emoji = status == 'success' ? '✅' : '❌'
-    def commitMsg = env.GIT_COMMIT_MSG ?: 'No commit message'
-    def commitHash = env.GIT_COMMIT_HASH ?: 'unknown'
-    def author = env.GIT_COMMIT_AUTHOR ?: 'Unknown'
-    def branch = env.GIT_BRANCH ?: 'unknown'
-    branch = branch.replaceAll('origin/', '').replaceAll('refs/heads/', '')
-    
-    def message = """
+    try {
+        withCredentials([string(credentialsId: 'slack-webhook-url', variable: 'SLACK_WEBHOOK_URL')]) {
+            def webhookUrl = env.SLACK_WEBHOOK_URL?.toString()?.trim()
+            if (!webhookUrl || webhookUrl.isEmpty()) {
+                echo "Slack webhook URL not configured, skipping notification"
+                return
+            }
+            
+            def color = status == 'success' ? 'good' : 'danger'
+            def emoji = status == 'success' ? '✅' : '❌'
+            def commitMsg = env.GIT_COMMIT_MSG ?: 'No commit message'
+            def commitHash = env.GIT_COMMIT_HASH ?: 'unknown'
+            def author = env.GIT_COMMIT_AUTHOR ?: 'Unknown'
+            def branch = env.GIT_BRANCH ?: 'unknown'
+            branch = branch.replaceAll('origin/', '').replaceAll('refs/heads/', '')
+            
+            def message = """
 ${emoji} *Client Frontend Build ${status.toUpperCase()}*
 
 *Commit:* ${commitHash}
@@ -255,27 +268,31 @@ ${emoji} *Client Frontend Build ${status.toUpperCase()}*
 *Author:* ${author}
 *Branch:* ${branch}
 *Build:* #${BUILD_NUMBER}
-*Port:* ${FRONTEND_PORT}
+*Port:* ${env.FRONTEND_PORT}
 *Duration:* ${currentBuild.durationString}
 *Console:* ${env.BUILD_URL}console
 
-${status == 'success' ? '🎉 Frontend deployed successfully on port ' + FRONTEND_PORT + '!' : '⚠️ Build failed. Please check the console logs.'}
+${status == 'success' ? '🎉 Frontend deployed successfully on port ' + env.FRONTEND_PORT + '!' : '⚠️ Build failed. Please check the console logs.'}
 """.stripIndent()
-    
-    sh """
-        curl -X POST "${webhookUrl}" \\
-        -H 'Content-Type: application/json' \\
-        -d '{
-            "channel": "${SLACK_CHANNEL}",
-            "username": "Jenkins CI/CD",
-            "icon_emoji": ":jenkins:",
-            "attachments": [{
-                "color": "${color}",
-                "text": "${message.replace('"', '\\"').replace('\n', '\\n')}",
-                "mrkdwn_in": ["text"]
-            }]
-        }'
-    """
+            
+            sh """
+                curl -X POST "${webhookUrl}" \\
+                -H 'Content-Type: application/json' \\
+                -d '{
+                    "channel": "${env.SLACK_CHANNEL}",
+                    "username": "Jenkins CI/CD",
+                    "icon_emoji": ":jenkins:",
+                    "attachments": [{
+                        "color": "${color}",
+                        "text": "${message.replace('"', '\\"').replace('\n', '\\n')}",
+                        "mrkdwn_in": ["text"]
+                    }]
+                }'
+            """
+        }
+    } catch (Exception e) {
+        echo "Slack notification failed (credential may not be configured): ${e.getMessage()}"
+    }
 }
 
 def generateBuildSummary() {
@@ -288,7 +305,7 @@ Status: ${currentBuild.currentResult}
 Branch: ${env.GIT_BRANCH}
 Commit: ${env.GIT_COMMIT_HASH}
 Author: ${env.GIT_COMMIT_AUTHOR}
-Port: ${FRONTEND_PORT}
+Port: ${env.FRONTEND_PORT}
 Duration: ${currentBuild.durationString}
 Build URL: ${env.BUILD_URL}
 ========================================

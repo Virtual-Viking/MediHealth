@@ -11,7 +11,6 @@ pipeline {
         BACKEND_PORT = '5002'
         REDIS_PORT = '5003'
         REDIS_CONTAINER_NAME = 'redis-medilink-client'
-        SLACK_WEBHOOK_URL = credentials('slack-webhook-url')
         SLACK_CHANNEL = '#ci-cd'
         DEPLOYMENT_URL = "http://localhost:${BACKEND_PORT}"
     }
@@ -239,13 +238,21 @@ pipeline {
                 success {
                     script {
                         echo "Deployment successful!"
-                        sendSlackNotification('success')
+                        try {
+                            sendSlackNotification('success')
+                        } catch (Exception e) {
+                            echo "Failed to send Slack notification: ${e.getMessage()}"
+                        }
                     }
                 }
                 failure {
                     script {
                         echo "Deployment failed!"
-                        sendSlackNotification('failure')
+                        try {
+                            sendSlackNotification('failure')
+                        } catch (Exception e) {
+                            echo "Failed to send Slack notification: ${e.getMessage()}"
+                        }
                     }
                 }
             }
@@ -295,15 +302,23 @@ pipeline {
         failure {
             script {
                 echo "Pipeline failed!"
-                sendSlackNotification('failure')
+                try {
+                    sendSlackNotification('failure')
+                } catch (Exception e) {
+                    echo "Failed to send Slack notification: ${e.getMessage()}"
+                }
             }
         }
         cleanup {
             script {
-                sh """
-                    cd ${BACKUP_DIR}
-                    ls -t | tail -n +11 | xargs rm -f || true
-                """
+                try {
+                    sh """
+                        cd ${env.BACKUP_DIR}
+                        ls -t | tail -n +11 | xargs rm -f || true
+                    """
+                } catch (Exception e) {
+                    echo "Cleanup failed: ${e.getMessage()}"
+                }
                 cleanWs()
             }
         }
@@ -312,21 +327,23 @@ pipeline {
 
 // Helper function to send Slack notifications
 def sendSlackNotification(String status) {
-    def webhookUrl = SLACK_WEBHOOK_URL?.toString()?.trim()
-    if (!webhookUrl || webhookUrl.isEmpty()) {
-        echo "Slack webhook URL not configured, skipping notification"
-        return
-    }
-    
-    def color = status == 'success' ? 'good' : 'danger'
-    def emoji = status == 'success' ? '✅' : '❌'
-    def commitMsg = env.GIT_COMMIT_MSG ?: 'No commit message'
-    def commitHash = env.GIT_COMMIT_HASH ?: 'unknown'
-    def author = env.GIT_COMMIT_AUTHOR ?: 'Unknown'
-    def branch = env.GIT_BRANCH ?: 'unknown'
-    branch = branch.replaceAll('origin/', '').replaceAll('refs/heads/', '')
-    
-    def message = """
+    try {
+        withCredentials([string(credentialsId: 'slack-webhook-url', variable: 'SLACK_WEBHOOK_URL')]) {
+            def webhookUrl = env.SLACK_WEBHOOK_URL?.toString()?.trim()
+            if (!webhookUrl || webhookUrl.isEmpty()) {
+                echo "Slack webhook URL not configured, skipping notification"
+                return
+            }
+            
+            def color = status == 'success' ? 'good' : 'danger'
+            def emoji = status == 'success' ? '✅' : '❌'
+            def commitMsg = env.GIT_COMMIT_MSG ?: 'No commit message'
+            def commitHash = env.GIT_COMMIT_HASH ?: 'unknown'
+            def author = env.GIT_COMMIT_AUTHOR ?: 'Unknown'
+            def branch = env.GIT_BRANCH ?: 'unknown'
+            branch = branch.replaceAll('origin/', '').replaceAll('refs/heads/', '')
+            
+            def message = """
 ${emoji} *Client Backend + Redis Build ${status.toUpperCase()}*
 
 *Commit:* ${commitHash}
@@ -334,28 +351,32 @@ ${emoji} *Client Backend + Redis Build ${status.toUpperCase()}*
 *Author:* ${author}
 *Branch:* ${branch}
 *Build:* #${BUILD_NUMBER}
-*Backend Port:* ${BACKEND_PORT}
-*Redis Port:* ${REDIS_PORT}
+*Backend Port:* ${env.BACKEND_PORT}
+*Redis Port:* ${env.REDIS_PORT}
 *Duration:* ${currentBuild.durationString}
 *Console:* ${env.BUILD_URL}console
 
 ${status == 'success' ? '🎉 Backend and Redis deployed successfully!' : '⚠️ Build failed. Please check the console logs.'}
 """.stripIndent()
-    
-    sh """
-        curl -X POST "${webhookUrl}" \\
-        -H 'Content-Type: application/json' \\
-        -d '{
-            "channel": "${SLACK_CHANNEL}",
-            "username": "Jenkins CI/CD",
-            "icon_emoji": ":jenkins:",
-            "attachments": [{
-                "color": "${color}",
-                "text": "${message.replace('"', '\\"').replace('\n', '\\n')}",
-                "mrkdwn_in": ["text"]
-            }]
-        }'
-    """
+            
+            sh """
+                curl -X POST "${webhookUrl}" \\
+                -H 'Content-Type: application/json' \\
+                -d '{
+                    "channel": "${env.SLACK_CHANNEL}",
+                    "username": "Jenkins CI/CD",
+                    "icon_emoji": ":jenkins:",
+                    "attachments": [{
+                        "color": "${color}",
+                        "text": "${message.replace('"', '\\"').replace('\n', '\\n')}",
+                        "mrkdwn_in": ["text"]
+                    }]
+                }'
+            """
+        }
+    } catch (Exception e) {
+        echo "Slack notification failed (credential may not be configured): ${e.getMessage()}"
+    }
 }
 
 def generateBuildSummary() {
@@ -368,8 +389,8 @@ Status: ${currentBuild.currentResult}
 Branch: ${env.GIT_BRANCH}
 Commit: ${env.GIT_COMMIT_HASH}
 Author: ${env.GIT_COMMIT_AUTHOR}
-Backend Port: ${BACKEND_PORT}
-Redis Port: ${REDIS_PORT}
+Backend Port: ${env.BACKEND_PORT}
+Redis Port: ${env.REDIS_PORT}
 Duration: ${currentBuild.durationString}
 Build URL: ${env.BUILD_URL}
 ========================================
