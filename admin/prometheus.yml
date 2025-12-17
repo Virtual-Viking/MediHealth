@@ -18,6 +18,6 @@ scrape_configs:
   # Node exporter (host metrics)
   - job_name: "node"
     static_configs:
-      # If node_exporter runs on the host (recommended on macOS), scrape via host.docker.internal
-      - targets: ["host.docker.internal:9100"]
+      # Node exporter runs in Docker, connect via container name
+      - targets: ["medilink-node-exporter:9100"]
 
