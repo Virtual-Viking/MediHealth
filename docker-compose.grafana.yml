@@ -37,7 +37,7 @@ services:
       - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
       
       # GCP Service Account Key (adjust path to your key file)
-      - ./backend/config/grafana-gcp-key.json:/etc/grafana/gcp-key.json:ro
+      - /Users/abhineetchaudhary/Desktop/MediHealth/grafana_key.json:/etc/grafana/gcp-key.json:ro
       
       # Dashboard JSON files
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro

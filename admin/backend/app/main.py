@@ -19,6 +19,9 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 import anyio
+import requests
+import time
+from app.services.grafana_service import get_grafana_service
 
 # Import routers (to be implemented)
 # from app.routers import (
@@ -35,6 +38,7 @@ import anyio
 
 # Import services
 # from app.services.database_service import init_db, close_db
+from app.services.grafana_service import get_grafana_service
 
 
 @asynccontextmanager
@@ -106,6 +110,10 @@ RAW_DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 DATABASE_URL = RAW_DATABASE_URL.replace("postgresql+asyncpg", "postgresql+psycopg2")
 connect_args = {"connect_timeout": 5} if DATABASE_URL.startswith("postgres") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args) if DATABASE_URL else None
+
+GRAFANA_URL = os.getenv("GRAFANA_URL", "http://localhost:3100").rstrip("/")
+GRAFANA_API_KEY = os.getenv("GRAFANA_API_KEY", "")
+GRAFANA_DS_UID = os.getenv("GRAFANA_DS_UID", "")
 
 
 class LoginRequest(BaseModel):
@@ -394,6 +402,20 @@ async def dashboard_health(current_admin: AdminProfile = Depends(get_current_adm
         HealthCheckItem(service="gcp_db", status=db_status, detail=db_detail, last_checked=now),
         HealthCheckItem(service="gcp_bucket", status="unknown", detail="not probed in local mode", last_checked=now),
     ]
+
+
+@app.get("/admin/monitoring/grafana/summary")
+async def grafana_summary(current_admin: AdminProfile = Depends(get_current_admin)):
+    """
+    Fetch live metrics from Grafana (Cloud Monitoring datasource):
+    - Cloud SQL CPU utilization
+    - Cloud SQL connections
+    - GCS total bytes
+    - GCS request rate
+    """
+    service = get_grafana_service()
+    data = service.get_summary()
+    return data
 
 
 @app.get("/admin/dashboard/performance", response_model=PerformanceMetrics)

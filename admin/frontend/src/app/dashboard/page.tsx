@@ -39,14 +39,11 @@ type HealthItem = {
 };
 
 type PerformanceMetrics = {
-  throughput_rps: number;
-  p95_latency_ms: number;
-  error_rate_pct: number;
-  cpu_pct: number;
-  memory_pct: number;
-  db_connections: number;
-  bucket_ops_per_min: number;
-  source: string;
+  cloudsql_cpu_utilization?: number | null;
+  cloudsql_connections?: number | null;
+  gcs_total_bytes?: number | null;
+  gcs_request_rate?: number | null;
+  error?: string;
 };
 
 type UserItem = {
@@ -80,7 +77,7 @@ export default function DashboardPage() {
           apiFetch<SummaryStats>("/admin/dashboard/summary", { method: "GET", auth: true }),
           apiFetch<ActivityItem[]>("/admin/dashboard/activity", { method: "GET", auth: true }),
           apiFetch<HealthItem[]>("/admin/dashboard/health", { method: "GET", auth: true }),
-          apiFetch<PerformanceMetrics>("/admin/dashboard/performance", { method: "GET", auth: true }),
+          apiFetch<PerformanceMetrics>("/admin/monitoring/grafana/summary", { method: "GET", auth: true }),
           apiFetch<UserItem[]>("/admin/users", { method: "GET", auth: true }),
         ]);
         setData(res);
@@ -243,19 +240,16 @@ export default function DashboardPage() {
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontWeight: 700 }}>Performance</div>
-            <div style={{ color: "var(--muted)", fontSize: 12 }}>{performance?.source || "stub"}</div>
+            <div style={{ fontWeight: 700 }}>Performance (Grafana)</div>
+            <div style={{ color: "var(--muted)", fontSize: 12 }}>{performance?.error ? "error" : "live"}</div>
           </div>
           <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
             {performance ? (
               <>
-                <Metric label="Throughput (rps)" value={performance.throughput_rps.toFixed(1)} />
-                <Metric label="p95 latency (ms)" value={performance.p95_latency_ms.toFixed(1)} />
-                <Metric label="Error rate (%)" value={performance.error_rate_pct.toFixed(2)} />
-                <Metric label="CPU (%)" value={performance.cpu_pct.toFixed(1)} />
-                <Metric label="Memory (%)" value={performance.memory_pct.toFixed(1)} />
-                <Metric label="DB connections" value={performance.db_connections} />
-                <Metric label="Bucket ops/min" value={performance.bucket_ops_per_min.toFixed(1)} />
+                <Metric label="Cloud SQL CPU (%)" value={toPercent(performance.cloudsql_cpu_utilization)} />
+                <Metric label="Cloud SQL connections" value={performance.cloudsql_connections ?? "..."} />
+                <Metric label="GCS total bytes" value={formatBytes(performance.gcs_total_bytes)} />
+                <Metric label="GCS req/sec" value={performance.gcs_request_rate ?? "..."} />
               </>
             ) : (
               <div style={{ color: "var(--muted)" }}>Loading performance...</div>
@@ -381,5 +375,22 @@ function Metric({ label, value }: { label: string; value: string | number }) {
       <div style={{ fontSize: 20, fontWeight: 700 }}>{value}</div>
     </div>
   );
+}
+
+function toPercent(value?: number | null) {
+  if (value === null || value === undefined) return "...";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function formatBytes(value?: number | null) {
+  if (value === null || value === undefined) return "...";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = value;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v.toFixed(1)} ${units[i]}`;
 }
 
