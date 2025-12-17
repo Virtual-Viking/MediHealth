@@ -38,30 +38,94 @@ const embeds: Embed[] = [
 
 export default function DashboardPage() {
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900 p-6">
-      <div className="max-w-[1920px] mx-auto space-y-4">
-        <header className="flex flex-col gap-2">
-          <h1 className="text-2xl font-semibold">Admin Dashboard</h1>
-          <p className="text-sm text-slate-600">
+    <main
+      style={{
+        minHeight: "100vh",
+        backgroundColor: "#f8fafc",
+        color: "#0f172a",
+        padding: "24px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          maxWidth: "1920px",
+          margin: "0 auto",
+          display: "flex",
+          flexDirection: "column",
+          gap: "16px",
+        }}
+      >
+        <header
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "8px",
+            textAlign: "center",
+          }}
+        >
+          <h1 style={{ fontSize: "24px", fontWeight: 600, margin: 0 }}>
+            Admin Dashboard
+          </h1>
+          <p style={{ fontSize: "14px", color: "#475569", margin: 0 }}>
             Embedded Grafana panels (uses your local Grafana at localhost:3100). Ensure Grafana
             allows embedding and you are authenticated.
           </p>
         </header>
 
-        <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-          {embeds.map((panel) => (
+        <section
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gap: "24px",
+            width: "100%",
+          }}
+        >
+          {embeds.map((panel, index) => (
             <article
               key={panel.src + panel.title}
-              className="rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden"
+              style={{
+                borderRadius: "8px",
+                border: "1px solid #e2e8f0",
+                backgroundColor: "#ffffff",
+                boxShadow: "0 1px 3px 0 rgba(0, 0, 0, 0.1)",
+                overflow: "hidden",
+                width: "100%",
+                gridColumn: index === 6 ? "2 / 3" : "auto",
+                display: "flex",
+                flexDirection: "column",
+              }}
             >
-              <div className="px-3 py-2 border-b border-slate-100 text-sm font-semibold text-slate-700">
+              <div
+                style={{
+                  padding: "8px 12px",
+                  borderBottom: "1px solid #f1f5f9",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                  color: "#334155",
+                }}
+              >
                 {panel.title}
               </div>
-              <div className="aspect-video min-h-[260px]">
+              <div
+                style={{
+                  aspectRatio: "16 / 9",
+                  minHeight: "260px",
+                  width: "100%",
+                  position: "relative",
+                }}
+              >
                 <iframe
                   title={panel.title}
                   src={panel.src}
-                  className="w-full h-full"
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    border: "none",
+                  }}
                   frameBorder="0"
                   allowFullScreen
                 />
