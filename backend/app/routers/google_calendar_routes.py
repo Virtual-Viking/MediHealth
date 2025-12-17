@@ -218,5 +218,11 @@ async def create_calendar_event(
         notes=payload.description,
     )
 
+    # Track appointment creation metric
+    from services.metrics import appointments_created_total
+    appointment_status = payload.status or "scheduled"
+    channel = "web"  # Could be determined from request headers or payload
+    appointments_created_total.labels(status=appointment_status, channel=channel).inc()
+
     return await _serialize_appointment(created, session)
 

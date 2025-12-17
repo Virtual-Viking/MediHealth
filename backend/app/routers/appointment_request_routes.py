@@ -285,6 +285,9 @@ async def update_appointment_request(
                         reason=request.reason,
                         notes=request.notes,
                     )
+                    # Track appointment creation metric
+                    from services.metrics import appointments_created_total
+                    appointments_created_total.labels(status="payment_pending", channel="web").inc()
                     await appointment_request_crud.update_appointment_request(
                         session,
                         request_id,

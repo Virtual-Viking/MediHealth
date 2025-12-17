@@ -3,6 +3,13 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
+  # Main backend metrics (FastAPI + custom product metrics)
+  - job_name: "main-backend"
+    metrics_path: /metrics
+    static_configs:
+      # If backend runs on host and Prometheus is in Docker, use host.docker.internal
+      - targets: ["host.docker.internal:8000"]
+
   # Admin backend metrics (FastAPI + custom counters)
   - job_name: "admin-backend"
     metrics_path: /metrics
@@ -21,3 +28,7 @@ scrape_configs:
       # Node exporter runs in Docker, connect via container name
       - targets: ["medilink-node-exporter:9100"]
 
+GF_AUTH_ANONYMOUS_ENABLED=true
+GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer   # or Editor, but Viewer is safer
+GF_AUTH_ANONYMOUS_ORG_NAME=Main Org.  # optional; defaults to main org
+GF_SECURITY_ALLOW_EMBEDDING=true      # needed for iframe embedding

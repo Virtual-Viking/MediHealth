@@ -11,6 +11,11 @@ services:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_SECURITY_SECRET_KEY=${GRAFANA_SECRET_KEY:-changeme-in-production}
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+
+      # Anonymous access for embeds (viewer role; tighten if needed)
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
       
       # Server
       - GF_SERVER_ROOT_URL=http://localhost:3100

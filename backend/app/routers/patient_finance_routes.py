@@ -284,6 +284,7 @@ async def submit_online_payment(
                 detail="Failed to process payment",
             )
 
+        # Metrics are tracked in complete_payment function
         return payment
     except Exception as e:
         import traceback

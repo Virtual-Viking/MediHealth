@@ -252,6 +252,12 @@ async def create_payment(
     session.add(payment)
     await session.commit()
     await session.refresh(payment)
+    
+    # Track payment creation metric
+    from services.metrics import payments_total
+    payment_method_label = payment_method or "pending"
+    payments_total.labels(method=payment_method_label, status="pending").inc()
+    
     return payment
 
 
@@ -383,6 +389,28 @@ async def complete_payment(
 
     await session.commit()
     await session.refresh(payment)
+    
+    # Track payment completion metrics
+    from services.metrics import (
+        payments_total,
+        payments_amount_cents_total,
+        platform_commission_cents_total,
+    )
+    method_label = payment.payment_method or "unknown"
+    
+    # Increment payment counter
+    payments_total.labels(method=method_label, status="completed").inc()
+    
+    # Track payment amount (convert to cents)
+    amount_cents = int(float(payment.final_amount) * 100)
+    role_label = "patient"  # Payment is from patient perspective
+    payments_amount_cents_total.labels(method=method_label, status="completed", role=role_label).inc(amount_cents)
+    
+    # Calculate and track platform commission (assuming 10% commission)
+    commission_rate = 0.10  # 10% platform commission
+    commission_cents = int(amount_cents * commission_rate)
+    platform_commission_cents_total.labels(method=method_label, status="completed").inc(commission_cents)
+    
     return payment
 
 
@@ -401,8 +429,29 @@ async def approve_payment(
     
     if payment.payment_status != PaymentStatus.pending.value:
         return None
-
+    
     payment.payment_status = PaymentStatus.completed.value
+    
+    # Track payment approval metrics (same as completion)
+    from services.metrics import (
+        payments_total,
+        payments_amount_cents_total,
+        platform_commission_cents_total,
+    )
+    method_label = payment.payment_method or "unknown"
+    
+    # Increment payment counter
+    payments_total.labels(method=method_label, status="completed").inc()
+    
+    # Track payment amount (convert to cents)
+    amount_cents = int(float(payment.final_amount) * 100)
+    role_label = "patient"
+    payments_amount_cents_total.labels(method=method_label, status="completed", role=role_label).inc(amount_cents)
+    
+    # Calculate and track platform commission (assuming 10% commission)
+    commission_rate = 0.10
+    commission_cents = int(amount_cents * commission_rate)
+    platform_commission_cents_total.labels(method=method_label, status="completed").inc(commission_cents)
 
     # Update appointment status to confirmed
     appointment = await session.get(Appointment, payment.appointment_id)

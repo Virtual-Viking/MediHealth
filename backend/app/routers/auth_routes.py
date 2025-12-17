@@ -69,6 +69,8 @@ async def create_user(user: CreateUser, session: AsyncSession = Depends(get_sess
             # Trying to create patient account
             if existing_is_patient:
                 # Already has patient account - error
+                from services.metrics import auth_events_total
+                auth_events_total.labels(type="signup", outcome="failure").inc()
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Email already in use! Please sign in"
@@ -105,6 +107,8 @@ async def create_user(user: CreateUser, session: AsyncSession = Depends(get_sess
             # Trying to create service provider account
             if existing_role_value:
                 # Already has a service provider role - cannot change
+                from services.metrics import auth_events_total
+                auth_events_total.labels(type="signup", outcome="failure").inc()
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Email already in use! Please sign in"
@@ -130,6 +134,11 @@ async def create_user(user: CreateUser, session: AsyncSession = Depends(get_sess
                 existing_user_by_email.is_patient = existing_is_patient
                 await session.commit()
                 await session.refresh(existing_user_by_email)
+                
+                # Track signup metric (adding service provider role to existing patient)
+                from services.metrics import auth_events_total
+                auth_events_total.labels(type="signup", outcome="success").inc()
+                
                 # Return the updated user
                 return ReadUser(
                     id=existing_user_by_email.id,
@@ -156,7 +165,13 @@ async def create_user(user: CreateUser, session: AsyncSession = Depends(get_sess
         user_data_dict["is_patient"] = False
         user_data_dict["role"] = service_provider_role
     
-    return await crud.create_user(user_data_dict, hashed, session)
+    created_user = await crud.create_user(user_data_dict, hashed, session)
+    
+    # Track signup metric
+    from services.metrics import auth_events_total
+    auth_events_total.labels(type="signup", outcome="success").inc()
+    
+    return created_user
 
 
 @router.post("/login")
@@ -171,6 +186,9 @@ async def user_login(
     if not validated_user or not await verify_password(
         user.password, validated_user.password_hash
     ):
+        # Track failed login attempt
+        from services.metrics import auth_events_total
+        auth_events_total.labels(type="login", outcome="failure").inc()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
         )
@@ -360,6 +378,10 @@ async def user_login(
         expires=refresh_exp,  # Uses the calculated datetime for long expiry
     )
 
+    # Track successful login
+    from services.metrics import auth_events_total
+    auth_events_total.labels(type="login", outcome="success").inc()
+    
     # Return user data in response to avoid immediate getCurrentUser call
     # Note: Cookies are already set on the response parameter, so return a dict
     # FastAPI will use the response parameter with cookies set

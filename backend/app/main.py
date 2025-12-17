@@ -19,6 +19,8 @@ from routers import (
     doctor_finance_routes,
 )
 from services.redis_service import get_redis_client, close_redis_client
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from fastapi.responses import Response
 
 
 app = FastAPI()
@@ -105,3 +107,10 @@ app.include_router(patient_file_routes.router, prefix="/patient-files", tags=["p
 app.include_router(insurance_routes.router, prefix="/insurance", tags=["insurance"])
 app.include_router(patient_finance_routes.router, prefix="/patient-finance", tags=["patient-finance"])
 app.include_router(doctor_finance_routes.router, prefix="/doctor-finance", tags=["doctor-finance"])
+
+
+# Prometheus metrics endpoint
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint"""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
