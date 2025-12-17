@@ -3,6 +3,23 @@ MediLink Admin Panel - Main Application
 FastAPI backend for admin panel with comprehensive security and monitoring
 """
 
+# IMPORTANT: Load environment variables FIRST before any other imports
+# that might depend on them (like database_service)
+import os
+from pathlib import Path
+import sys
+from dotenv import load_dotenv
+
+# Load environment from backend/.env regardless of current working directory
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
+backend_root_str = str(BACKEND_ROOT)
+if backend_root_str not in sys.path:
+    sys.path.insert(0, backend_root_str)
+
+ENV_PATH = BACKEND_ROOT / ".env"
+load_dotenv(dotenv_path=ENV_PATH, override=False)
+
+# Now import everything else
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Any, Dict
 
@@ -13,10 +30,6 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
-import os
-from pathlib import Path
-import sys
-from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 import anyio
@@ -25,6 +38,7 @@ import time
 from app.services.grafana_service import get_grafana_service
 from app.services.gcp_monitoring_service import GCPMonitoringService
 from app.services.prometheus_service import get_prom_summary
+from app.services.cloudsql_backup_service import get_cloudsql_backup_service
 import logging
 from prometheus_client import Counter, Histogram, CONTENT_TYPE_LATEST, generate_latest
 import time as _time
@@ -42,8 +56,8 @@ import time as _time
 # from app.middleware.admin_auth_middleware import AdminAuthMiddleware
 # from app.middleware.audit_logging_middleware import AuditLoggingMiddleware
 
-# Import services
-# from app.services.database_service import init_db, close_db
+# Import services (AFTER .env is loaded!)
+from app.services.database_service import init_connector, close_connector, engine
 from app.services.grafana_service import get_grafana_service
 
 
@@ -54,14 +68,24 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     print("🚀 Starting MediLink Admin Panel...")
-    # await init_db()
+    # Initialize Cloud SQL connector if using Cloud SQL
+    try:
+        init_connector()
+        print("✅ Database connector initialized")
+    except Exception as e:
+        print(f"⚠️  Database connector initialization failed: {e}")
+        print("   Falling back to direct database connection if configured")
     print("✅ Admin Panel ready!")
     
     yield
     
     # Shutdown
     print("🛑 Shutting down Admin Panel...")
-    # await close_db()
+    try:
+        close_connector()
+        print("✅ Database connector closed")
+    except Exception as e:
+        print(f"⚠️  Error closing database connector: {e}")
     print("✅ Cleanup complete")
 
 
@@ -74,17 +98,6 @@ app = FastAPI(
     redoc_url="/redoc",
     lifespan=lifespan
 )
-
-# Load environment from backend/.env regardless of current working directory
-BACKEND_ROOT = Path(__file__).resolve().parent.parent
-
-# Ensure backend root on sys.path for absolute imports when run from subdirs
-backend_root_str = str(BACKEND_ROOT)
-if backend_root_str not in sys.path:
-    sys.path.insert(0, backend_root_str)
-
-ENV_PATH = BACKEND_ROOT / ".env"
-load_dotenv(dotenv_path=ENV_PATH, override=False)
 
 # CORS Configuration
 ADMIN_CORS_DEFAULT = "http://localhost:3000,http://localhost:3001"
@@ -117,11 +130,8 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/admin/auth/login")
 
-RAW_DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-# Normalize to sync driver if asyncpg DSN was provided
-DATABASE_URL = RAW_DATABASE_URL.replace("postgresql+asyncpg", "postgresql+psycopg2")
-connect_args = {"connect_timeout": 5} if DATABASE_URL.startswith("postgres") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args) if DATABASE_URL else None
+# Database engine is now initialized in database_service.py
+# Import it from there
 
 GRAFANA_URL = os.getenv("GRAFANA_URL", "http://localhost:3100").rstrip("/")
 GRAFANA_API_KEY = os.getenv("GRAFANA_API_KEY", "")
@@ -376,6 +386,309 @@ async def dashboard_summary(current_admin: AdminProfile = Depends(get_current_ad
             )
 
     return await _fetch()
+
+
+class WidgetStats(BaseModel):
+    doctors_enrolled: int
+    doctors_approved: int
+    total_patients: int
+    patients_this_month: int
+    total_payments_received: float
+    platform_commission: float
+    currency: str = "USD"
+
+
+@app.get("/admin/dashboard/widgets", response_model=WidgetStats)
+async def dashboard_widgets(current_admin: AdminProfile = Depends(get_current_admin)):
+    """
+    Fetch widget statistics for the admin dashboard.
+    """
+    async def _fetch() -> WidgetStats:
+        if not engine:
+            print("[dashboard_widgets] WARNING: Database engine not initialized. Returning zeros.")
+            return WidgetStats(
+                doctors_enrolled=0,
+                doctors_approved=0,
+                total_patients=0,
+                patients_this_month=0,
+                total_payments_received=0.0,
+                platform_commission=0.0,
+                currency="USD",
+            )
+        try:
+            def run_queries() -> Dict[str, Any]:
+                now = datetime.now(timezone.utc)
+                start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                
+                with engine.connect() as conn:
+                    # Doctors enrolled (total count)
+                    doctors_enrolled = conn.execute(
+                        text("SELECT COUNT(*) FROM doctor_profiles")
+                    ).scalar_one()
+                    
+                    # Doctors approved (same as enrolled for now)
+                    doctors_approved = doctors_enrolled
+                    
+                    # Total patients
+                    total_patients = conn.execute(
+                        text("SELECT COUNT(*) FROM patient_profiles")
+                    ).scalar_one()
+                    
+                    # Patients enrolled this month
+                    patients_this_month = conn.execute(
+                        text("""
+                            SELECT COUNT(*) FROM patient_profiles 
+                            WHERE created_at >= :start_of_month
+                        """),
+                        {"start_of_month": start_of_month}
+                    ).scalar_one()
+                    
+                    # Total payments received by doctors (completed payments)
+                    total_payments_result = conn.execute(
+                        text("""
+                            SELECT COALESCE(SUM(final_amount), 0) 
+                            FROM payments 
+                            WHERE payment_status = 'completed'
+                        """)
+                    ).scalar_one()
+                    total_payments_received = float(total_payments_result or 0)
+                    
+                    # Platform commission: 9% of total payments
+                    # Note: The user mentioned 8.5% tax goes to doctor and 9% is platform commission
+                    # So commission = 9% of the base amount (before tax)
+                    # But since we're calculating from final_amount, we need to reverse calculate
+                    # If final_amount = base_amount * 1.085 (8.5% tax) + base_amount * 0.09 (9% commission)
+                    # final_amount = base_amount * 1.175
+                    # So commission = final_amount * (0.09 / 1.175) = final_amount * 0.0766
+                    # Actually, let's simplify: commission is 9% of the payment amount
+                    # Based on user's description: for $100 payment, platform adds 8.5% tax and 9% platform fees
+                    # So if base is $100, tax = $8.5, commission = $9, total = $117.5
+                    # Commission = 9/117.5 = 7.66% of final_amount
+                    # But the user said "9% is our commission", so let's use 9% of the base amount
+                    # Since we have final_amount, we calculate: commission = final_amount * (0.09 / 1.175)
+                    platform_commission = total_payments_received * (0.09 / 1.175)
+                    
+                    return {
+                        "doctors_enrolled": doctors_enrolled,
+                        "doctors_approved": doctors_approved,
+                        "total_patients": total_patients,
+                        "patients_this_month": patients_this_month,
+                        "total_payments_received": total_payments_received,
+                        "platform_commission": platform_commission,
+                    }
+
+            try:
+                # Increase timeout to 30 seconds for remote database connections
+                with anyio.fail_after(30):
+                    data = await anyio.to_thread.run_sync(run_queries)
+            except TimeoutError:
+                print("[dashboard_widgets] Query execution timed out after 30 seconds")
+                return WidgetStats(
+                    doctors_enrolled=0,
+                    doctors_approved=0,
+                    total_patients=0,
+                    patients_this_month=0,
+                    total_payments_received=0.0,
+                    platform_commission=0.0,
+                    currency="USD",
+                )
+            return WidgetStats(currency="USD", **data)
+        except SQLAlchemyError as e:
+            error_msg = str(e)
+            print(f"[dashboard_widgets] DB error: {error_msg}")
+            # Log more details for debugging
+            if "timeout" in error_msg.lower() or "connection" in error_msg.lower():
+                print(f"[dashboard_widgets] Connection issue detected. DATABASE_URL configured: {bool(DATABASE_URL)}")
+                if DATABASE_URL:
+                    # Mask password in URL for logging
+                    safe_url = DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else "***"
+                    print(f"[dashboard_widgets] Attempting to connect to: ...@{safe_url}")
+            return WidgetStats(
+                doctors_enrolled=0,
+                doctors_approved=0,
+                total_patients=0,
+                patients_this_month=0,
+                total_payments_received=0.0,
+                platform_commission=0.0,
+                currency="USD",
+            )
+
+    return await _fetch()
+
+
+class LogEntry(BaseModel):
+    id: str
+    timestamp: datetime
+    message: str
+    details: Optional[str] = None
+
+
+class BackupLogEntry(BaseModel):
+    id: str
+    status: str
+    type: str
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    description: str
+    location: str
+
+
+@app.get("/admin/dashboard/logs/signin", response_model=List[LogEntry])
+async def dashboard_signin_logs(current_admin: AdminProfile = Depends(get_current_admin), limit: int = 20):
+    """
+    Fetch recent sign-in logs from the database.
+    Shows recently created user accounts as a proxy for sign-ins.
+    """
+    if not engine:
+        return []
+    
+    try:
+        def run_query() -> List[Dict[str, Any]]:
+            with engine.connect() as conn:
+                # Query users table for recent account creations
+                result = conn.execute(text("""
+                    SELECT 
+                        u.user_id,
+                        u.email,
+                        u.role,
+                        u.created_at
+                    FROM users u
+                    ORDER BY u.created_at DESC
+                    LIMIT :limit
+                """), {"limit": limit})
+                
+                logs = []
+                for row in result:
+                    user_id, email, role, created_at = row
+                    role_display = role.capitalize() if role else 'User'
+                    logs.append({
+                        "id": f"signin-{user_id}",
+                        "timestamp": created_at,
+                        "message": f"{role_display} registered: {email}",
+                        "details": f"User ID: {user_id}"
+                    })
+                return logs
+        
+        logs_data = await anyio.to_thread.run_sync(run_query)
+        return [LogEntry(**log) for log in logs_data]
+    except Exception as e:
+        print(f"[signin_logs] Error: {e}")
+        return []
+
+
+@app.get("/admin/dashboard/logs/payments", response_model=List[LogEntry])
+async def dashboard_payment_logs(current_admin: AdminProfile = Depends(get_current_admin), limit: int = 20):
+    """
+    Fetch recent payment logs from the database.
+    """
+    if not engine:
+        return []
+    
+    try:
+        def run_query() -> List[Dict[str, Any]]:
+            with engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT 
+                        p.payment_id,
+                        p.final_amount,
+                        p.payment_status,
+                        p.payment_method,
+                        p.created_at,
+                        p.updated_at,
+                        u.email as patient_email
+                    FROM payments p
+                    LEFT JOIN users u ON p.patient_user_id = u.user_id
+                    ORDER BY p.updated_at DESC
+                    LIMIT :limit
+                """), {"limit": limit})
+                
+                logs = []
+                for row in result:
+                    payment_id, final_amount, status, method, created_at, updated_at, patient_email = row
+                    timestamp = updated_at or created_at
+                    status_display = status.replace('_', ' ').title()
+                    method_display = method if method else 'Pending'
+                    logs.append({
+                        "id": f"payment-{payment_id}",
+                        "timestamp": timestamp,
+                        "message": f"Payment {status_display}: ${float(final_amount):.2f} via {method_display}",
+                        "details": f"Patient: {patient_email or 'Unknown'} | Payment ID: {payment_id}"
+                    })
+                return logs
+        
+        logs_data = await anyio.to_thread.run_sync(run_query)
+        return [LogEntry(**log) for log in logs_data]
+    except Exception as e:
+        print(f"[payment_logs] Error: {e}")
+        return []
+
+
+@app.get("/admin/dashboard/logs/appointments", response_model=List[LogEntry])
+async def dashboard_appointment_logs(current_admin: AdminProfile = Depends(get_current_admin), limit: int = 20):
+    """
+    Fetch recent appointment logs from the database.
+    """
+    if not engine:
+        return []
+    
+    try:
+        def run_query() -> List[Dict[str, Any]]:
+            with engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT 
+                        a.appointment_id,
+                        a.appointment_date,
+                        a.status,
+                        a.created_at,
+                        a.updated_at,
+                        p.email as patient_email,
+                        d.email as doctor_email
+                    FROM appointments a
+                    LEFT JOIN users p ON a.patient_user_id = p.user_id
+                    LEFT JOIN users d ON a.doctor_user_id = d.user_id
+                    ORDER BY a.updated_at DESC
+                    LIMIT :limit
+                """), {"limit": limit})
+                
+                logs = []
+                for row in result:
+                    apt_id, apt_date, status, created_at, updated_at, patient_email, doctor_email = row
+                    timestamp = updated_at or created_at
+                    status_display = status.replace('_', ' ').title() if status else 'Pending'
+                    date_str = apt_date.strftime('%b %d, %Y') if apt_date else 'N/A'
+                    logs.append({
+                        "id": f"appointment-{apt_id}",
+                        "timestamp": timestamp,
+                        "message": f"Appointment {status_display} for {date_str}",
+                        "details": f"Patient: {patient_email or 'Unknown'} | Doctor: {doctor_email or 'Unknown'}"
+                    })
+                return logs
+        
+        logs_data = await anyio.to_thread.run_sync(run_query)
+        return [LogEntry(**log) for log in logs_data]
+    except Exception as e:
+        print(f"[appointment_logs] Error: {e}")
+        return []
+
+
+@app.get("/admin/dashboard/logs/cloudsql-backups", response_model=List[BackupLogEntry])
+async def dashboard_cloudsql_backup_logs(current_admin: AdminProfile = Depends(get_current_admin), limit: int = 10):
+    """
+    Fetch Cloud SQL backup logs from GCP Cloud SQL Admin API.
+    Shows automated PITR backups and their status.
+    """
+    try:
+        backup_service = get_cloudsql_backup_service()
+        if not backup_service:
+            print("[cloudsql_backups] Backup service not available")
+            return []
+        
+        backups = backup_service.fetch_recent_backups(max_results=limit)
+        return [BackupLogEntry(**backup) for backup in backups]
+        
+    except Exception as e:
+        print(f"[cloudsql_backups] Error: {e}")
+        return []
 
 
 @app.get("/admin/dashboard/activity", response_model=List[ActivityItem])
