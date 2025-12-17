@@ -1,0 +1,301 @@
+pipeline {
+    agent any
+    
+    environment {
+        NODE_VERSION = '18.x'
+        FRONTEND_DIR = 'frontend'
+        BUILD_DIR = '${WORKSPACE}/${FRONTEND_DIR}'
+        BACKUP_DIR = '${WORKSPACE}/backups'
+        FRONTEND_PORT = '5001'
+        SLACK_WEBHOOK_URL = credentials('slack-webhook-url')
+        SLACK_CHANNEL = '#team2'
+        DEPLOYMENT_URL = "http://localhost:${FRONTEND_PORT}"
+    }
+    
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+    }
+    
+    triggers {
+        pollSCM('H/5 * * * *') // Poll every 5 minutes
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    echo "Checking out code from ${env.GIT_BRANCH}"
+                    checkout scm
+                    env.GIT_COMMIT_MSG = sh(
+                        script: 'git log -1 --pretty=%B',
+                        returnStdout: true
+                    ).trim()
+                    env.GIT_COMMIT_AUTHOR = sh(
+                        script: 'git log -1 --pretty=%an',
+                        returnStdout: true
+                    ).trim()
+                    env.GIT_COMMIT_HASH = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+                }
+            }
+        }
+        
+        stage('Create Backup') {
+            steps {
+                script {
+                    echo "Creating backup of previous build..."
+                    sh """
+                        mkdir -p ${BACKUP_DIR}
+                        if [ -d "${BUILD_DIR}/.next" ]; then
+                            tar -czf ${BACKUP_DIR}/frontend-backup-${BUILD_NUMBER}-${env.GIT_COMMIT_HASH}.tar.gz \
+                                -C ${BUILD_DIR} .next package.json package-lock.json
+                            echo "Backup created: frontend-backup-${BUILD_NUMBER}-${env.GIT_COMMIT_HASH}.tar.gz"
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('Setup Node.js') {
+            steps {
+                script {
+                    echo "Setting up Node.js ${NODE_VERSION}"
+                    sh '''
+                        if command -v node &> /dev/null; then
+                            echo "Node.js already installed: $(node --version)"
+                            echo "npm version: $(npm --version)"
+                        else
+                            echo "Installing Node.js..."
+                            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+                            sudo apt-get install -y nodejs
+                        fi
+                        node --version
+                        npm --version
+                    '''
+                }
+            }
+        }
+        
+        stage('Install Dependencies') {
+            steps {
+                dir(FRONTEND_DIR) {
+                    script {
+                        echo "Installing npm dependencies..."
+                        sh 'npm ci'
+                    }
+                }
+            }
+        }
+        
+        stage('Lint') {
+            steps {
+                dir(FRONTEND_DIR) {
+                    script {
+                        echo "Running ESLint..."
+                        sh 'npm run lint || true'
+                    }
+                }
+            }
+        }
+        
+        stage('Build') {
+            steps {
+                dir(FRONTEND_DIR) {
+                    script {
+                        echo "Building Next.js application..."
+                        sh '''
+                            export NODE_ENV=production
+                            npm run build
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('Deploy') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'master'
+                    branch 'prince'
+                }
+            }
+            steps {
+                script {
+                    echo "Deploying frontend to localhost:${FRONTEND_PORT}..."
+                    
+                    sh """
+                        cd ${BUILD_DIR}
+                        
+                        # Install PM2 if not available
+                        if ! command -v pm2 &> /dev/null; then
+                            echo "Installing PM2..."
+                            npm install -g pm2
+                        fi
+                        
+                        # Stop existing frontend process if running
+                        pm2 stop medilink-client-frontend || true
+                        pm2 delete medilink-client-frontend || true
+                        
+                        # Ensure port ${FRONTEND_PORT} is available
+                        echo "Checking port ${FRONTEND_PORT}..."
+                        lsof -ti:${FRONTEND_PORT} | xargs kill -9 2>/dev/null || true
+                        
+                        # Start frontend on port ${FRONTEND_PORT}
+                        echo "Starting frontend on port ${FRONTEND_PORT}..."
+                        PORT=${FRONTEND_PORT} pm2 start npm --name "medilink-client-frontend" -- start
+                        
+                        # Save PM2 process list
+                        pm2 save
+                        
+                        # Display PM2 status
+                        pm2 status
+                        
+                        echo "Frontend deployed successfully!"
+                        echo "Access frontend at: http://localhost:${FRONTEND_PORT}"
+                    """
+                }
+            }
+            post {
+                success {
+                    script {
+                        echo "Deployment successful!"
+                        sendSlackNotification('success')
+                    }
+                }
+                failure {
+                    script {
+                        echo "Deployment failed!"
+                        sendSlackNotification('failure')
+                    }
+                }
+            }
+        }
+        
+        stage('Health Check') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'master'
+                    branch 'prince'
+                }
+            }
+            steps {
+                script {
+                    echo "Running health check..."
+                    sleep(time: 10, unit: 'SECONDS')
+                    sh """
+                        for i in {1..5}; do
+                            echo "Health check attempt \$i..."
+                            curl -f ${DEPLOYMENT_URL} || curl -f ${DEPLOYMENT_URL}/api/health || true
+                            sleep 5
+                        done
+                    """
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                echo "Pipeline completed. Generating summary..."
+                generateBuildSummary()
+            }
+        }
+        success {
+            script {
+                echo "Pipeline succeeded!"
+                sendSlackNotification('success')
+            }
+        }
+        failure {
+            script {
+                echo "Pipeline failed!"
+                sendSlackNotification('failure')
+            }
+        }
+        cleanup {
+            script {
+                sh """
+                    cd ${BACKUP_DIR}
+                    ls -t | tail -n +11 | xargs rm -f || true
+                """
+                cleanWs()
+            }
+        }
+    }
+}
+
+// Helper function to send Slack notifications
+def sendSlackNotification(String status) {
+    def webhookUrl = SLACK_WEBHOOK_URL?.toString()?.trim()
+    if (!webhookUrl || webhookUrl.isEmpty()) {
+        echo "Slack webhook URL not configured, skipping notification"
+        return
+    }
+    
+    def color = status == 'success' ? 'good' : 'danger'
+    def emoji = status == 'success' ? '✅' : '❌'
+    def commitMsg = env.GIT_COMMIT_MSG ?: 'No commit message'
+    def commitHash = env.GIT_COMMIT_HASH ?: 'unknown'
+    def author = env.GIT_COMMIT_AUTHOR ?: 'Unknown'
+    def branch = env.GIT_BRANCH ?: 'unknown'
+    branch = branch.replaceAll('origin/', '').replaceAll('refs/heads/', '')
+    
+    def message = """
+${emoji} *Client Frontend Build ${status.toUpperCase()}*
+
+*Commit:* ${commitHash}
+*Message:* ${commitMsg}
+*Author:* ${author}
+*Branch:* ${branch}
+*Build:* #${BUILD_NUMBER}
+*Port:* ${FRONTEND_PORT}
+*Duration:* ${currentBuild.durationString}
+*Console:* ${env.BUILD_URL}console
+
+${status == 'success' ? '🎉 Frontend deployed successfully on port ' + FRONTEND_PORT + '!' : '⚠️ Build failed. Please check the console logs.'}
+""".stripIndent()
+    
+    sh """
+        curl -X POST "${webhookUrl}" \\
+        -H 'Content-Type: application/json' \\
+        -d '{
+            "channel": "${SLACK_CHANNEL}",
+            "username": "Jenkins CI/CD",
+            "icon_emoji": ":jenkins:",
+            "attachments": [{
+                "color": "${color}",
+                "text": "${message.replace('"', '\\"').replace('\n', '\\n')}",
+                "mrkdwn_in": ["text"]
+            }]
+        }'
+    """
+}
+
+def generateBuildSummary() {
+    def summary = """
+========================================
+Client Frontend CI/CD Pipeline Summary
+========================================
+Build Number: ${BUILD_NUMBER}
+Status: ${currentBuild.currentResult}
+Branch: ${env.GIT_BRANCH}
+Commit: ${env.GIT_COMMIT_HASH}
+Author: ${env.GIT_COMMIT_AUTHOR}
+Port: ${FRONTEND_PORT}
+Duration: ${currentBuild.durationString}
+Build URL: ${env.BUILD_URL}
+========================================
+""".stripIndent()
+    
+    echo summary
+    writeFile file: 'build-summary.txt', text: summary
+    archiveArtifacts artifacts: 'build-summary.txt', allowEmptyArchive: true
+}
+

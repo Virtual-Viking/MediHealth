@@ -37,6 +37,12 @@ const nextConfig: NextConfig = {
   // Disable strict mode in production if needed
   reactStrictMode: true,
 
+  // Disable dev indicators for clean recording
+  devIndicators: {
+    buildActivity: false,
+    appIsrStatus: false,
+  },
+
   // ESLint configuration - don't fail build on warnings
   eslint: {
     // Warning: This allows production builds to successfully complete even if

@@ -1,0 +1,382 @@
+pipeline {
+    agent any
+    
+    environment {
+        PYTHON_VERSION = '3.11'
+        BACKEND_DIR = 'backend'
+        REDIS_DIR = 'redis'
+        BUILD_DIR = '${WORKSPACE}/${BACKEND_DIR}'
+        BACKUP_DIR = '${WORKSPACE}/backups'
+        DOCKER_COMPOSE_FILE = "${WORKSPACE}/docker-compose.redis.yml"
+        BACKEND_PORT = '5002'
+        REDIS_PORT = '5003'
+        REDIS_CONTAINER_NAME = 'redis-medilink-client'
+        SLACK_WEBHOOK_URL = credentials('slack-webhook-url')
+        SLACK_CHANNEL = '#ci-cd'
+        DEPLOYMENT_URL = "http://localhost:${BACKEND_PORT}"
+    }
+    
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+    }
+    
+    triggers {
+        pollSCM('H/5 * * * *') // Poll every 5 minutes
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    echo "Checking out code from ${env.GIT_BRANCH}"
+                    checkout scm
+                    env.GIT_COMMIT_MSG = sh(
+                        script: 'git log -1 --pretty=%B',
+                        returnStdout: true
+                    ).trim()
+                    env.GIT_COMMIT_AUTHOR = sh(
+                        script: 'git log -1 --pretty=%an',
+                        returnStdout: true
+                    ).trim()
+                    env.GIT_COMMIT_HASH = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+                }
+            }
+        }
+        
+        stage('Create Backup') {
+            steps {
+                script {
+                    echo "Creating backup of previous build..."
+                    sh """
+                        mkdir -p ${BACKUP_DIR}
+                        if [ -d "${BUILD_DIR}/app" ]; then
+                            tar -czf ${BACKUP_DIR}/backend-backup-${BUILD_NUMBER}-${env.GIT_COMMIT_HASH}.tar.gz \
+                                -C ${BUILD_DIR} app requirements.txt alembic.ini alembic/
+                            echo "Backup created: backend-backup-${BUILD_NUMBER}-${env.GIT_COMMIT_HASH}.tar.gz"
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('Setup Python') {
+            steps {
+                script {
+                    echo "Setting up Python ${PYTHON_VERSION}"
+                    sh '''
+                        if command -v python3 &> /dev/null; then
+                            echo "Python already installed: $(python3 --version)"
+                        else
+                            echo "Installing Python..."
+                            sudo apt-get update
+                            sudo apt-get install -y python3 python3-pip python3-venv
+                        fi
+                        python3 --version
+                        pip3 --version
+                    '''
+                }
+            }
+        }
+        
+        stage('Check Docker') {
+            steps {
+                script {
+                    echo "Checking Docker availability..."
+                    sh '''
+                        if ! command -v docker &> /dev/null; then
+                            echo "Docker is not installed. Please install Docker first."
+                            exit 1
+                        fi
+                        if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
+                            echo "Docker Compose is not installed. Please install Docker Compose first."
+                            exit 1
+                        fi
+                        docker --version
+                        docker-compose --version || docker compose version
+                    '''
+                }
+            }
+        }
+        
+        stage('Deploy Redis') {
+            steps {
+                script {
+                    echo "Deploying Redis on port ${REDIS_PORT}..."
+                    sh """
+                        # Stop existing Redis container if running
+                        docker stop ${REDIS_CONTAINER_NAME} 2>/dev/null || true
+                        docker rm ${REDIS_CONTAINER_NAME} 2>/dev/null || true
+                        
+                        # Stop using docker-compose if exists
+                        cd ${WORKSPACE}
+                        if [ -f "${DOCKER_COMPOSE_FILE}" ]; then
+                            docker-compose -f ${DOCKER_COMPOSE_FILE} down 2>/dev/null || docker compose -f ${DOCKER_COMPOSE_FILE} down 2>/dev/null || true
+                        fi
+                        
+                        # Start Redis on custom port
+                        docker run -d \\
+                            --name ${REDIS_CONTAINER_NAME} \\
+                            -p ${REDIS_PORT}:6379 \\
+                            -v redis-client-data:/data \\
+                            --restart unless-stopped \\
+                            redis:8.2 redis-server --appendonly yes
+                        
+                        # Wait for Redis to be ready
+                        sleep 5
+                        
+                        # Verify Redis is running
+                        docker exec ${REDIS_CONTAINER_NAME} redis-cli ping || {
+                            echo "Redis health check failed!"
+                            exit 1
+                        }
+                        
+                        echo "Redis deployed successfully on port ${REDIS_PORT}!"
+                    """
+                }
+            }
+        }
+        
+        stage('Create Virtual Environment') {
+            steps {
+                dir(BACKEND_DIR) {
+                    script {
+                        echo "Creating virtual environment..."
+                        sh '''
+                            if [ ! -d "venv" ]; then
+                                python3 -m venv venv
+                            fi
+                            . venv/bin/activate
+                            pip install --upgrade pip
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('Install Dependencies') {
+            steps {
+                dir(BACKEND_DIR) {
+                    script {
+                        echo "Installing Python dependencies..."
+                        sh '''
+                            . venv/bin/activate
+                            pip install -r requirements.txt
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('Database Migrations') {
+            steps {
+                dir(BACKEND_DIR) {
+                    script {
+                        echo "Running database migrations..."
+                        sh '''
+                            . venv/bin/activate
+                            alembic upgrade head || echo "Migration failed or already up to date"
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('Deploy Backend') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'master'
+                    branch 'prince'
+                }
+            }
+            steps {
+                script {
+                    echo "Deploying backend to localhost:${BACKEND_PORT}..."
+                    
+                    sh """
+                        cd ${BUILD_DIR}
+                        . venv/bin/activate
+                        
+                        # Install PM2 if not available
+                        if ! command -v pm2 &> /dev/null; then
+                            echo "Installing PM2..."
+                            npm install -g pm2
+                        fi
+                        
+                        # Stop existing backend process if running
+                        pm2 stop medilink-client-backend || true
+                        pm2 delete medilink-client-backend || true
+                        
+                        # Ensure port ${BACKEND_PORT} is available
+                        echo "Checking port ${BACKEND_PORT}..."
+                        lsof -ti:${BACKEND_PORT} | xargs kill -9 2>/dev/null || true
+                        
+                        # Start backend on port ${BACKEND_PORT}
+                        echo "Starting backend on port ${BACKEND_PORT}..."
+                        pm2 start venv/bin/python \\
+                            --name "medilink-client-backend" \\
+                            --cwd ${BUILD_DIR} \\
+                            -- -m uvicorn app.main:app --host 0.0.0.0 --port ${BACKEND_PORT}
+                        
+                        # Save PM2 process list
+                        pm2 save
+                        
+                        # Display PM2 status
+                        pm2 status
+                        
+                        echo "Backend deployed successfully!"
+                        echo "Access backend at: http://localhost:${BACKEND_PORT}"
+                        echo "API docs at: http://localhost:${BACKEND_PORT}/docs"
+                    """
+                }
+            }
+            post {
+                success {
+                    script {
+                        echo "Deployment successful!"
+                        sendSlackNotification('success')
+                    }
+                }
+                failure {
+                    script {
+                        echo "Deployment failed!"
+                        sendSlackNotification('failure')
+                    }
+                }
+            }
+        }
+        
+        stage('Health Check') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'master'
+                    branch 'prince'
+                }
+            }
+            steps {
+                script {
+                    echo "Running health checks..."
+                    sleep(time: 10, unit: 'SECONDS')
+                    sh """
+                        # Check backend
+                        for i in {1..5}; do
+                            echo "Backend health check attempt \$i..."
+                            curl -f ${DEPLOYMENT_URL}/auth/health || curl -f ${DEPLOYMENT_URL}/docs || true
+                            sleep 5
+                        done
+                        
+                        # Check Redis
+                        echo "Redis health check..."
+                        docker exec ${REDIS_CONTAINER_NAME} redis-cli ping || echo "Redis check failed"
+                    """
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                echo "Pipeline completed. Generating summary..."
+                generateBuildSummary()
+            }
+        }
+        success {
+            script {
+                echo "Pipeline succeeded!"
+            }
+        }
+        failure {
+            script {
+                echo "Pipeline failed!"
+                sendSlackNotification('failure')
+            }
+        }
+        cleanup {
+            script {
+                sh """
+                    cd ${BACKUP_DIR}
+                    ls -t | tail -n +11 | xargs rm -f || true
+                """
+                cleanWs()
+            }
+        }
+    }
+}
+
+// Helper function to send Slack notifications
+def sendSlackNotification(String status) {
+    def webhookUrl = SLACK_WEBHOOK_URL?.toString()?.trim()
+    if (!webhookUrl || webhookUrl.isEmpty()) {
+        echo "Slack webhook URL not configured, skipping notification"
+        return
+    }
+    
+    def color = status == 'success' ? 'good' : 'danger'
+    def emoji = status == 'success' ? '✅' : '❌'
+    def commitMsg = env.GIT_COMMIT_MSG ?: 'No commit message'
+    def commitHash = env.GIT_COMMIT_HASH ?: 'unknown'
+    def author = env.GIT_COMMIT_AUTHOR ?: 'Unknown'
+    def branch = env.GIT_BRANCH ?: 'unknown'
+    branch = branch.replaceAll('origin/', '').replaceAll('refs/heads/', '')
+    
+    def message = """
+${emoji} *Client Backend + Redis Build ${status.toUpperCase()}*
+
+*Commit:* ${commitHash}
+*Message:* ${commitMsg}
+*Author:* ${author}
+*Branch:* ${branch}
+*Build:* #${BUILD_NUMBER}
+*Backend Port:* ${BACKEND_PORT}
+*Redis Port:* ${REDIS_PORT}
+*Duration:* ${currentBuild.durationString}
+*Console:* ${env.BUILD_URL}console
+
+${status == 'success' ? '🎉 Backend and Redis deployed successfully!' : '⚠️ Build failed. Please check the console logs.'}
+""".stripIndent()
+    
+    sh """
+        curl -X POST "${webhookUrl}" \\
+        -H 'Content-Type: application/json' \\
+        -d '{
+            "channel": "${SLACK_CHANNEL}",
+            "username": "Jenkins CI/CD",
+            "icon_emoji": ":jenkins:",
+            "attachments": [{
+                "color": "${color}",
+                "text": "${message.replace('"', '\\"').replace('\n', '\\n')}",
+                "mrkdwn_in": ["text"]
+            }]
+        }'
+    """
+}
+
+def generateBuildSummary() {
+    def summary = """
+========================================
+Client Backend + Redis CI/CD Pipeline Summary
+========================================
+Build Number: ${BUILD_NUMBER}
+Status: ${currentBuild.currentResult}
+Branch: ${env.GIT_BRANCH}
+Commit: ${env.GIT_COMMIT_HASH}
+Author: ${env.GIT_COMMIT_AUTHOR}
+Backend Port: ${BACKEND_PORT}
+Redis Port: ${REDIS_PORT}
+Duration: ${currentBuild.durationString}
+Build URL: ${env.BUILD_URL}
+========================================
+""".stripIndent()
+    
+    echo summary
+    writeFile file: 'build-summary.txt', text: summary
+    archiveArtifacts artifacts: 'build-summary.txt', allowEmptyArchive: true
+}
+
