@@ -1198,6 +1198,14 @@ export const patientAPI = {
       defaultError: "Failed to fetch account status",
     });
   },
+
+  getTimeline: async (activityType?: string): Promise<PatientTimelineItem[]> => {
+    const query = activityType ? `?activity_type=${encodeURIComponent(activityType)}` : "";
+    return apiFetch<PatientTimelineItem[]>(`/patients/timeline${query}`, {
+      method: "GET",
+      defaultError: "Failed to fetch timeline",
+    });
+  },
 };
 
 export const calendarAPI = {
@@ -1866,6 +1874,9 @@ export interface PatientTimelineItem {
   title: string;
   detail?: string | null;
   timestamp: string;
+  provider?: string | null;
+  location?: string | null;
+  description?: string | null;
   files?: { name: string; url: string }[];
 }
 

@@ -6,7 +6,7 @@ FastAPI backend for admin panel with comprehensive security and monitoring
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Any, Dict
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
@@ -24,6 +24,10 @@ import requests
 import time
 from app.services.grafana_service import get_grafana_service
 from app.services.gcp_monitoring_service import GCPMonitoringService
+from app.services.prometheus_service import get_prom_summary
+import logging
+from prometheus_client import Counter, Histogram, CONTENT_TYPE_LATEST, generate_latest
+import time as _time
 
 # Import routers (to be implemented)
 # from app.routers import (
@@ -122,6 +126,21 @@ engine = create_engine(DATABASE_URL, connect_args=connect_args) if DATABASE_URL 
 GRAFANA_URL = os.getenv("GRAFANA_URL", "http://localhost:3100").rstrip("/")
 GRAFANA_API_KEY = os.getenv("GRAFANA_API_KEY", "")
 GRAFANA_DS_UID = os.getenv("GRAFANA_DS_UID", "")
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "").strip()
+GCP_LOCATION = os.getenv("GCP_LOCATION", "").strip() or None
+
+# Prometheus instrumentation
+REQUEST_COUNT = Counter(
+    "admin_api_requests_total",
+    "Total HTTP requests",
+    ["method", "path", "status"],
+)
+REQUEST_LATENCY = Histogram(
+    "admin_api_request_duration_seconds",
+    "HTTP request latency",
+    ["method", "path", "status"],
+    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10),
+)
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "").strip()
 GCP_LOCATION = os.getenv("GCP_LOCATION", "").strip() or None
 
@@ -244,6 +263,19 @@ def get_current_admin(token: str = Depends(oauth2_scheme)) -> AdminProfile:
         raise credentials_exception
 
     return AdminProfile(email=configured_email, display_name="Admin")
+
+
+@app.middleware("http")
+async def prometheus_middleware(request, call_next):
+    start = _time.time()
+    response = await call_next(request)
+    elapsed = _time.time() - start
+    path = request.url.path
+    status_code = str(response.status_code)
+    method = request.method
+    REQUEST_COUNT.labels(method=method, path=path, status=status_code).inc()
+    REQUEST_LATENCY.labels(method=method, path=path, status=status_code).observe(elapsed)
+    return response
 
 
 @app.post("/admin/auth/login", response_model=TokenResponse)
@@ -429,6 +461,57 @@ async def grafana_summary(current_admin: AdminProfile = Depends(get_current_admi
     data["grafana_url"] = GRAFANA_URL
     data["datasource_uid"] = GRAFANA_DS_UID
     return data
+
+
+_gcp_monitoring_service: GCPMonitoringService | None = None
+
+
+def get_gcp_monitoring_service() -> GCPMonitoringService | None:
+    global _gcp_monitoring_service
+    if _gcp_monitoring_service is not None:
+        return _gcp_monitoring_service
+    if not GCP_PROJECT_ID:
+        return None
+    _gcp_monitoring_service = GCPMonitoringService(
+        project_id=GCP_PROJECT_ID,
+        location=GCP_LOCATION,
+    )
+    return _gcp_monitoring_service
+
+
+@app.get("/admin/monitoring/gcp/summary")
+async def gcp_monitoring_summary(current_admin: AdminProfile = Depends(get_current_admin)):
+    """
+    Fetch key metrics directly from Cloud Monitoring (no Grafana dependency).
+    """
+    service = get_gcp_monitoring_service()
+    if not service:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="GCP_PROJECT_ID is not configured",
+        )
+    return service.fetch_summary()
+
+
+@app.get("/admin/monitoring/prom/summary")
+async def prom_monitoring_summary(current_admin: AdminProfile = Depends(get_current_admin)):
+    """
+    Fetch key metrics from Prometheus (backend/node/postgres exporters).
+    """
+    try:
+        return get_prom_summary()
+    except Exception as exc:
+        logging.exception("Failed to fetch Prometheus summary")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching Prometheus metrics: {exc}",
+        )
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 _gcp_monitoring_service: GCPMonitoringService | None = None

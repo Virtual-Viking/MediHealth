@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { calendarAPI, Appointment } from "@/services/api";
+import { calendarAPI, Appointment, patientAPI, PatientTimelineItem } from "@/services/api";
 
-type ActivityType = "appointment" | "share" | "order" | "therapy" | "chore" | "collect";
+type ActivityType = "appointment" | "share" | "order" | "therapy" | "chore" | "collect" | "payment";
 
 interface Activity {
   date: string;
@@ -21,6 +21,9 @@ export default function PatientDashboardContent() {
   const { user: _user } = useAuth();
   const [upcomingAppointment, setUpcomingAppointment] = useState<Appointment | null>(null);
   const [isLoadingAppointment, setIsLoadingAppointment] = useState(true);
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [isLoadingTimeline, setIsLoadingTimeline] = useState(true);
+  const [filterType, setFilterType] = useState<string>("all");
 
   useEffect(() => {
     const fetchUpcomingAppointment = async () => {
@@ -43,17 +46,97 @@ export default function PatientDashboardContent() {
     fetchUpcomingAppointment();
   }, []);
 
+  useEffect(() => {
+    const fetchTimeline = async () => {
+      try {
+        setIsLoadingTimeline(true);
+        const activityType = filterType === "all" ? undefined : filterType;
+        const timelineItems = await patientAPI.getTimeline(activityType);
+        
+        // Convert timeline items to activities
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+
+        const convertedActivities: Activity[] = timelineItems.map((item, index) => {
+          const itemDate = new Date(item.timestamp);
+          const itemDateOnly = new Date(itemDate.getFullYear(), itemDate.getMonth(), itemDate.getDate());
+          
+          // Only show date label if this is the first item or if the date changed from previous item
+          let dateLabel: string | undefined;
+          if (index === 0) {
+            // First item always shows date label
+            if (itemDateOnly.getTime() === today.getTime()) {
+              dateLabel = "Today";
+            } else if (itemDateOnly.getTime() === tomorrow.getTime()) {
+              dateLabel = "Tomorrow";
+            } else if (itemDateOnly.getTime() === yesterday.getTime()) {
+              dateLabel = "Yesterday";
+            }
+          } else {
+            // Check if date changed from previous item
+            const prevItem = timelineItems[index - 1];
+            const prevDate = new Date(prevItem.timestamp);
+            const prevDateOnly = new Date(prevDate.getFullYear(), prevDate.getMonth(), prevDate.getDate());
+            
+            if (itemDateOnly.getTime() !== prevDateOnly.getTime()) {
+              if (itemDateOnly.getTime() === today.getTime()) {
+                dateLabel = "Today";
+              } else if (itemDateOnly.getTime() === tomorrow.getTime()) {
+                dateLabel = "Tomorrow";
+              } else if (itemDateOnly.getTime() === yesterday.getTime()) {
+                dateLabel = "Yesterday";
+              }
+            }
+          }
+
+          return {
+            date: formatDate(item.timestamp),
+            time: formatTime(item.timestamp),
+            type: item.type as ActivityType,
+            title: item.title,
+            provider: item.provider || "System",
+            location: item.location || "Online",
+            description: item.description || item.detail || "",
+            dateLabel,
+          };
+        });
+
+        setActivities(convertedActivities);
+      } catch (error) {
+        console.error("Failed to fetch timeline:", error);
+        setActivities([]);
+      } finally {
+        setIsLoadingTimeline(false);
+      }
+    };
+
+    fetchTimeline();
+  }, [filterType]);
+
   const formatDate = (dateString: string): string => {
     const date = new Date(dateString);
-    const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     
-    const dayName = days[date.getDay()];
     const month = months[date.getMonth()];
     const day = date.getDate();
     const year = date.getFullYear();
     
-    return `${dayName} ${month} ${day} ${year}`;
+    // Get ordinal suffix for day
+    const getOrdinalSuffix = (d: number): string => {
+      if (d > 3 && d < 21) return "th";
+      switch (d % 10) {
+        case 1: return "st";
+        case 2: return "nd";
+        case 3: return "rd";
+        default: return "th";
+      }
+    };
+    
+    return `${month} ${day}${getOrdinalSuffix(day)} ${year}`;
   };
 
   const formatTime = (dateString: string): string => {
@@ -64,99 +147,8 @@ export default function PatientDashboardContent() {
     const displayHours = hours % 12 || 12;
     const displayMinutes = minutes.toString().padStart(2, "0");
     
-    // Get timezone abbreviation (simplified - shows EST/EDT or local timezone)
-    const timezone = Intl.DateTimeFormat("en", { timeZoneName: "short" }).formatToParts(date)
-      .find(part => part.type === "timeZoneName")?.value || "";
-    
-    return `${displayHours}:${displayMinutes} ${ampm} ${timezone}`;
+    return `${displayHours}:${displayMinutes}${ampm.toLowerCase()}`;
   };
-
-  const activities: Activity[] = [
-    {
-      date: "Oct 16th 2025",
-      time: "16:25pm",
-      type: "appointment",
-      title: "Appointment",
-      provider: "Dr. Orange Cat | GP",
-      location: "Lifeline Clinic",
-      description: "Have an Appointment with Dr. Orange Cat specializing in General Praticing & Cardiology follow-up appointment for Recurring Headaches. Patient states ' having headaches since last few months on irregular itervals and having problem in his sleeps '.",
-      dateLabel: "Tomorrow"
-    },
-    {
-      date: "Oct 15th 2025",
-      time: "02:00pm",
-      type: "share",
-      title: "Share Record",
-      provider: "Dr. Orange Cat | GP",
-      location: "Online",
-      description: "Share weekly blood sugar ( glucose level ) and Blood Pressure Level with Dr. Orange Cat",
-      dateLabel: "Today"
-    },
-    {
-      date: "Oct 15th 2025",
-      time: "02:00pm",
-      type: "order",
-      title: "Order Meds",
-      provider: "CSV Pharmacy",
-      location: "Online",
-      description: "Metaformin 500mg is running low and is prescribed to be taken until next week order early to prevent skipping dosage"
-    },
-    {
-      date: "Oct 15th 2025",
-      time: "02:00pm",
-      type: "therapy",
-      title: "Physiotherapy",
-      provider: "Dr. Orange Cat | GP",
-      location: "Lifeline Clinic",
-      description: "Metaformin 500mg is running low and is prescribed to be taken until next week order early to prevent skipping dosage",
-      dateLabel: "Yesterday"
-    },
-    {
-      date: "Oct 15th 2025",
-      time: "02:00pm",
-      type: "chore",
-      title: "Some Chore",
-      provider: "Dr. Orange Cat | GP",
-      location: "Clinic Pickup",
-      description: "Blood test report for thyroid check is complete and ready to be collected."
-    },
-    {
-      date: "Oct 15th 2025",
-      time: "02:00pm",
-      type: "collect",
-      title: "Collect report",
-      provider: "Dr. Orange Cat | GP",
-      location: "Clinic Pickup",
-      description: "Blood test report for thyroid check is complete and ready to be collected."
-    },
-    {
-      date: "Oct 15th 2025",
-      time: "02:00pm",
-      type: "collect",
-      title: "Collect report",
-      provider: "Dr. Orange Cat | GP",
-      location: "Clinic Pickup",
-      description: "Blood test report for thyroid check is complete and ready to be collected."
-    },
-    {
-      date: "Oct 15th 2025",
-      time: "02:00pm",
-      type: "collect",
-      title: "Collect report",
-      provider: "Dr. Orange Cat | GP",
-      location: "Clinic Pickup",
-      description: "Blood test report for thyroid check is complete and ready to be collected."
-    },
-    {
-      date: "Oct 15th 2025",
-      time: "02:00pm",
-      type: "collect",
-      title: "Collect report",
-      provider: "Dr. Orange Cat | GP",
-      location: "Clinic Pickup",
-      description: "Blood test report for thyroid check is complete and ready to be collected."
-    }
-  ];
 
   const getActivityIcon = (type: ActivityType) => {
     switch (type) {
@@ -271,22 +263,8 @@ export default function PatientDashboardContent() {
                 </button>
               </h3>
             </div>
-            <div className="grid grid-cols-3 gap-2 text-xs">
-              <div>
-                <div className="text-gray-500 text-xs mb-1">Glucose lvl</div>
-                <div className="font-bold text-red-600 text-base">143 mg/dl</div>
-                <div className="text-gray-400 text-xs">-- mg/dl</div>
-              </div>
-              <div>
-                <div className="text-gray-500 text-xs mb-1">time/date</div>
-                <div className="font-medium text-gray-900">07:43am today</div>
-                <div className="text-gray-400 text-xs">-- today</div>
-              </div>
-              <div>
-                <div className="text-gray-500 text-xs mb-1">Context</div>
-                <div className="font-medium text-gray-900">Before Breakfast</div>
-                <div className="text-gray-400 text-xs">After Breakfast</div>
-              </div>
+            <div className="flex justify-center items-center py-4">
+              <div className="text-gray-400 text-xs">No data available</div>
             </div>
           </div>
         </div>
@@ -304,33 +282,47 @@ export default function PatientDashboardContent() {
                 </button>
               </h3>
             </div>
-            <div className="grid grid-cols-4 gap-2 text-xs">
-              <div>
-                <div className="text-gray-500 text-xs mb-1">Systolic</div>
-                <div className="font-bold text-green-600 text-base">125 mmHg</div>
-                <div className="text-gray-400 text-xs">-- mmHg</div>
-              </div>
-              <div>
-                <div className="text-gray-500 text-xs mb-1">Diastolic</div>
-                <div className="font-bold text-green-600 text-base">82 mmHg</div>
-                <div className="text-gray-400 text-xs">-- mmHg</div>
-              </div>
-              <div>
-                <div className="text-gray-500 text-xs mb-1">Pulse</div>
-                <div className="font-bold text-green-600 text-base">68 BPM</div>
-                <div className="text-gray-400 text-xs">-- BPM</div>
-              </div>
-              <div>
-                <div className="text-gray-500 text-xs mb-1">time/date</div>
-                <div className="font-medium text-gray-900 text-xs">07:43 am Today</div>
-              </div>
+            <div className="flex justify-center items-center py-4">
+              <div className="text-gray-400 text-xs">No data available</div>
             </div>
           </div>
         </div>
 
         {/* Row 2 - Timeline - Spans all 3 columns */}
         <div className="bg-white rounded-lg shadow p-4" style={{ gridRow: "2 / 3", gridColumn: "1 / 4" }}>
-          {activities.map((activity, index) => (
+          {/* Filter Section */}
+          <div className="mb-6 pb-4 border-b border-gray-200">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-900">Activity Timeline</h2>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm text-gray-600">Filter:</span>
+                <select
+                  value={filterType}
+                  onChange={(e) => setFilterType(e.target.value)}
+                  className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent cursor-pointer"
+                >
+                  <option value="all">All Activities</option>
+                  <option value="appointment">Appointments</option>
+                  <option value="payment">Payments</option>
+                  <option value="order">Orders</option>
+                  <option value="share">Share Records</option>
+                  <option value="collect">Collect Reports</option>
+                  <option value="chore">File Uploads</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {isLoadingTimeline ? (
+            <div className="flex justify-center items-center py-8">
+              <div className="text-gray-400 text-sm">Loading timeline...</div>
+            </div>
+          ) : activities.length === 0 ? (
+            <div className="flex justify-center items-center py-8">
+              <div className="text-gray-400 text-sm">No timeline activities yet</div>
+            </div>
+          ) : (
+            activities.map((activity, index) => (
             <div key={index} className="relative">
               {/* Date Label */}
               {activity.dateLabel && (
@@ -382,7 +374,8 @@ export default function PatientDashboardContent() {
                 </div>
               </div>
             </div>
-          ))}
+          ))
+          )}
         </div>
       </div>
     </main>

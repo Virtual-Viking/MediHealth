@@ -8,6 +8,7 @@ from fastapi import (
     Depends,
     File,
     HTTPException,
+    Query,
     UploadFile,
     status,
 )
@@ -20,6 +21,7 @@ from sqlalchemy.orm import selectinload
 from db.models.appointment_model import Appointment
 from db.models.finance_model import Payment
 from db.models.user_model import User
+from db.models.patient_file_model import FileBatch, FileBatchShare
 from pydantic import BaseModel
 from schemas import (
     PatientProfileEnvelope,
@@ -41,6 +43,17 @@ class VisitingDoctorTimelineItem(BaseModel):
     title: str
     detail: Optional[str] = None
     timestamp: str
+
+
+class PatientTimelineItem(BaseModel):
+    type: str
+    title: str
+    detail: Optional[str] = None
+    timestamp: str
+    provider: Optional[str] = None
+    location: Optional[str] = None
+    description: Optional[str] = None
+    files: Optional[List[Dict[str, str]]] = None
 
 
 class VisitingDoctor(BaseModel):
@@ -513,4 +526,254 @@ async def get_patient_account_status(
         )
     
     return result
+
+
+@router.get("/timeline", response_model=List[PatientTimelineItem])
+async def get_patient_timeline(
+    activity_type: Optional[str] = Query(None, description="Filter by activity type: appointment, payment, order, share, collect, chore"),
+    current_user=Depends(get_current_patient),
+    session: AsyncSession = Depends(get_session),
+):
+    """Get unified timeline of all patient activities: appointments, file shares, payments, and file uploads.
+    
+    Args:
+        activity_type: Optional filter by activity type. Valid values: 'appointment', 'payment', 'order', 'share', 'collect', 'chore'
+    """
+    from datetime import datetime, timezone
+    
+    events: List[PatientTimelineItem] = []
+    
+    # 1. Get all appointments
+    appt_result = await session.execute(
+        select(Appointment)
+        .where(Appointment.patient_user_id == current_user.id)
+    )
+    appointments = appt_result.scalars().all()
+    
+    # Get doctor info for appointments
+    doctor_ids = {appt.doctor_user_id for appt in appointments if appt.doctor_user_id}
+    doctors_map = {}
+    if doctor_ids:
+        doctors_result = await session.execute(
+            select(User)
+            .where(User.id.in_(doctor_ids))
+            .options(selectinload(User.doctor_profile))
+        )
+        for doctor in doctors_result.scalars().all():
+            doctors_map[doctor.id] = doctor
+    
+    for appt in appointments:
+        doctor = doctors_map.get(appt.doctor_user_id) if appt.doctor_user_id else None
+        doctor_name = None
+        doctor_specialty = None
+        if doctor and doctor.doctor_profile:
+            doctor_name = f"{doctor.first_name} {doctor.last_name}".strip()
+            doctor_specialty = doctor.doctor_profile.specialty
+        
+        provider = f"Dr. {doctor_name} | {doctor_specialty}" if doctor_name else "Doctor"
+        location = "Clinic"  # Appointment model doesn't have location field
+        
+        # Appointment created/booked
+        if appt.created_at:
+            events.append(
+                PatientTimelineItem(
+                    type="appointment",
+                    title="Appointment booked",
+                    detail=f"Status: {appt.status}",
+                    timestamp=appt.created_at.isoformat(),
+                    provider=provider,
+                    location=location,
+                    description=appt.reason or appt.notes or f"Appointment with {provider}",
+                )
+            )
+        
+        # Appointment confirmed
+        if appt.status == "confirmed" and appt.updated_at and appt.updated_at != appt.created_at:
+            events.append(
+                PatientTimelineItem(
+                    type="appointment",
+                    title="Appointment confirmed",
+                    detail=None,
+                    timestamp=appt.updated_at.isoformat(),
+                    provider=provider,
+                    location=location,
+                    description=f"Appointment confirmed for {appt.appointment_date.strftime('%B %d, %Y at %I:%M %p') if appt.appointment_date else 'scheduled date'}",
+                )
+            )
+        
+        # Appointment date/time
+        if appt.appointment_date:
+            events.append(
+                PatientTimelineItem(
+                    type="appointment",
+                    title="Appointment",
+                    detail=None,
+                    timestamp=appt.appointment_date.isoformat(),
+                    provider=provider,
+                    location=location,
+                    description=appt.reason or appt.notes or f"Appointment with {provider}",
+                )
+            )
+    
+    # 2. Get all payments
+    payments_result = await session.execute(
+        select(Payment)
+        .where(Payment.patient_user_id == current_user.id)
+        .options(selectinload(Payment.doctor))
+    )
+    payments = payments_result.scalars().all()
+    
+    # Get file batches for payments
+    batch_ids = []
+    for payment in payments:
+        if payment.cheque_batch_id:
+            batch_ids.append(payment.cheque_batch_id)
+        if payment.insurance_batch_id:
+            batch_ids.append(payment.insurance_batch_id)
+    
+    batches_by_id = {}
+    if batch_ids:
+        batches_result = await session.execute(
+            select(FileBatch)
+            .where(FileBatch.id.in_(batch_ids))
+            .options(selectinload(FileBatch.files))
+        )
+        for batch in batches_result.scalars().all():
+            batches_by_id[batch.id] = batch
+    
+    for payment in payments:
+        doctor = payment.doctor if hasattr(payment, 'doctor') else None
+        doctor_name = None
+        if doctor:
+            doctor_name = f"{doctor.first_name} {doctor.last_name}".strip()
+        
+        provider = f"Dr. {doctor_name}" if doctor_name else "Doctor"
+        location = "Online"
+        
+        files_payload = None
+        batch_id = payment.cheque_batch_id or payment.insurance_batch_id
+        if batch_id and batches_by_id.get(batch_id):
+            files_payload = [
+                {
+                    "name": f.file_name,
+                    "url": f.file_url,
+                }
+                for f in batches_by_id[batch_id].files
+            ]
+        
+        ts_pay = payment.updated_at or payment.created_at
+        if ts_pay:
+            payment_type = "Order Meds" if payment.payment_method == "insurance" else "Payment"
+            events.append(
+                PatientTimelineItem(
+                    type="order" if payment.payment_method == "insurance" else "payment",
+                    title=payment_type,
+                    detail=f"Status: {payment.payment_status}, Method: {payment.payment_method or 'N/A'}",
+                    timestamp=ts_pay.isoformat(),
+                    provider=provider,
+                    location=location,
+                    description=f"Payment {payment.payment_status} via {payment.payment_method or 'N/A'}",
+                    files=files_payload,
+                )
+            )
+    
+    # 3. Get file shares (when patient shares files with doctors)
+    shares_result = await session.execute(
+        select(FileBatchShare)
+        .where(FileBatchShare.patient_user_id == current_user.id)
+        .options(selectinload(FileBatchShare.batch).selectinload(FileBatch.files))
+        .options(selectinload(FileBatchShare.doctor).selectinload(User.doctor_profile))
+    )
+    shares = shares_result.scalars().all()
+    
+    for share in shares:
+        doctor = share.doctor if hasattr(share, 'doctor') else None
+        doctor_name = None
+        if doctor:
+            doctor_name = f"{doctor.first_name} {doctor.last_name}".strip()
+        
+        provider = f"Dr. {doctor_name}" if doctor_name else "Doctor"
+        location = "Online"
+        
+        cat = share.batch.category if share.batch else None
+        files_payload = None
+        if share.batch and share.batch.files:
+            files_payload = [
+                {
+                    "name": f.file_name,
+                    "url": f.file_url,
+                }
+                for f in share.batch.files
+            ]
+        
+        ts_share = share.shared_at or share.updated_at or share.created_at
+        if ts_share:
+            category_text = cat.replace("_", " ").title() if cat else "files"
+            events.append(
+                PatientTimelineItem(
+                    type="share",
+                    title="Share Record",
+                    detail=f"Category: {category_text}",
+                    timestamp=ts_share.isoformat(),
+                    provider=provider,
+                    location=location,
+                    description=f"Shared {category_text} with {provider}",
+                    files=files_payload,
+                )
+            )
+    
+    # 4. Get file uploads (when patient uploads files)
+    batches_result = await session.execute(
+        select(FileBatch)
+        .where(FileBatch.patient_user_id == current_user.id)
+        .options(selectinload(FileBatch.files))
+    )
+    file_batches = batches_result.scalars().all()
+    
+    for batch in file_batches:
+        files_payload = [
+            {
+                "name": f.file_name,
+                "url": f.file_url,
+            }
+            for f in batch.files
+        ]
+        
+        category_text = batch.category.replace("_", " ").title() if batch.category else "files"
+        title = "Collect report" if batch.category == "lab_report" else "File Upload"
+        
+        ts_upload = batch.created_at
+        if ts_upload:
+            events.append(
+                PatientTimelineItem(
+                    type="collect" if batch.category == "lab_report" else "chore",
+                    title=title,
+                    detail=f"Category: {category_text}",
+                    timestamp=ts_upload.isoformat(),
+                    provider="System",
+                    location="Online",
+                    description=f"{category_text} uploaded: {batch.heading or 'No heading'}",
+                    files=files_payload,
+                )
+            )
+    
+    # Sort all events by timestamp (newest first)
+    events.sort(key=lambda e: e.timestamp, reverse=True)
+    
+    # Filter by activity type if provided
+    if activity_type:
+        # Map frontend filter values to backend types
+        type_mapping = {
+            "appointment": "appointment",
+            "payment": "payment",
+            "order": "order",
+            "share": "share",
+            "send_reports": "share",
+            "collect": "collect",
+            "chore": "chore",
+        }
+        filter_type = type_mapping.get(activity_type.lower(), activity_type.lower())
+        events = [e for e in events if e.type == filter_type]
+    
+    return events
 

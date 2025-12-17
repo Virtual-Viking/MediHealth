@@ -1,0 +1,23 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Admin backend metrics (FastAPI + custom counters)
+  - job_name: "admin-backend"
+    metrics_path: /metrics
+    static_configs:
+      # If backend runs on host and Prometheus is in Docker, use host.docker.internal
+      - targets: ["host.docker.internal:8001"]
+
+  # Postgres exporter (for GCP Cloud SQL: run a sidecar that scrapes Cloud SQL and exposes locally)
+  - job_name: "postgres"
+    static_configs:
+      - targets: ["medilink-postgres-exporter:9187"]
+
+  # Node exporter (host metrics)
+  - job_name: "node"
+    static_configs:
+      # If node_exporter runs on the host (recommended on macOS), scrape via host.docker.internal
+      - targets: ["host.docker.internal:9100"]
+
