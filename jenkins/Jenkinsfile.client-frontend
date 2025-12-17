@@ -97,16 +97,47 @@ pipeline {
                             # Download and install Node.js
                             if command -v curl &> /dev/null; then
                                 echo "Downloading Node.js ${NODE_VERSION} for ${ARCH}..."
-                                curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" -o /tmp/node.tar.xz
                                 
-                                echo "Extracting Node.js..."
-                                tar -xJf /tmp/node.tar.xz -C /tmp
+                                # Check if xz is available
+                                XZ_AVAILABLE=0
+                                if command -v xz &> /dev/null; then
+                                    XZ_AVAILABLE=1
+                                    echo "xz utility found, using .tar.xz format"
+                                else
+                                    echo "xz utility not found, attempting to install xz-utils..."
+                                    # Try to install xz-utils (may require sudo, but try without first)
+                                    if command -v apt-get &> /dev/null; then
+                                        if apt-get update 2>/dev/null && apt-get install -y xz-utils 2>/dev/null; then
+                                            XZ_AVAILABLE=1
+                                            echo "xz-utils installed successfully"
+                                        else
+                                            echo "Could not install xz-utils (may require sudo), using .tar.gz format instead"
+                                            XZ_AVAILABLE=0
+                                        fi
+                                    else
+                                        echo "apt-get not available, using .tar.gz format"
+                                        XZ_AVAILABLE=0
+                                    fi
+                                fi
+                                
+                                # Download and extract based on xz availability
+                                if [ "$XZ_AVAILABLE" = "1" ]; then
+                                    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" -o /tmp/node.tar.xz
+                                    echo "Extracting Node.js from .tar.xz..."
+                                    tar -xJf /tmp/node.tar.xz -C /tmp
+                                    TAR_FILE="/tmp/node.tar.xz"
+                                else
+                                    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.gz" -o /tmp/node.tar.gz
+                                    echo "Extracting Node.js from .tar.gz..."
+                                    tar -xzf /tmp/node.tar.gz -C /tmp
+                                    TAR_FILE="/tmp/node.tar.gz"
+                                fi
                                 
                                 echo "Installing to ${NODE_INSTALL_DIR}..."
                                 cp -r /tmp/node-v${NODE_VERSION}-linux-${ARCH}/* ${NODE_INSTALL_DIR}/
                                 
                                 # Cleanup
-                                rm -rf /tmp/node-v${NODE_VERSION}-linux-${ARCH} /tmp/node.tar.xz
+                                rm -rf /tmp/node-v${NODE_VERSION}-linux-${ARCH} ${TAR_FILE}
                                 
                                 # Verify installation
                                 if [ -f "${NODE_INSTALL_DIR}/bin/node" ]; then
